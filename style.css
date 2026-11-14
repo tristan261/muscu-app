@@ -78,7 +78,7 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--acc);
 .menu span.ic { font-size: 24px; }
 .back { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); text-decoration: none; font-weight: 700; min-height: 40px; }
 
-#tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; display: grid; grid-template-columns: repeat(5, 1fr); background: rgba(13, 16, 20, .96); backdrop-filter: blur(10px); border-top: 1px solid var(--line); padding: 6px 4px calc(6px + var(--safe-b)); }
+#tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; display: grid; grid-template-columns: repeat(4, 1fr); background: rgba(13, 16, 20, .96); backdrop-filter: blur(10px); border-top: 1px solid var(--line); padding: 6px 4px calc(6px + var(--safe-b)); }
 #tabs a { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 700; border-radius: 12px; }
 #tabs a span { font-size: 22px; filter: grayscale(1) opacity(.7); }
 #tabs a.on { color: var(--acc); }
@@ -140,3 +140,8 @@ ol.steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column;
 div.cap1, p.cap1 { display: block; }
 .remgrid { display: grid; grid-template-columns: 70px minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: center; }
 .remgrid input { min-width: 0; padding: 8px 6px; font-size: 16px; }
+
+.mrow { cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+.gear { display: grid; place-items: center; text-decoration: none; }
+.small.acc, .t.acc { color: var(--acc); }
+button:disabled { cursor: default; }

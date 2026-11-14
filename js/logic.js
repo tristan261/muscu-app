@@ -1,29 +1,17 @@
-/* FORGE — logique : programme, progression, repas, courses, XP, badges */
+/* FORGE V2 — moteur de règles : progression, semaine, muscle-up, poids, repas, courses
+   Aucune part de hasard : mêmes données → même résultat. */
 "use strict";
 
-/* ================= PROGRAMME & PROGRESSION ================= */
 const KG_STEP = 1.5, KG_MAX = 9;
 
-function findSlot(key) {
-  for (const t of Object.keys(PROGRAM)) for (const s of PROGRAM[t].slots) if (s.key === key) return s;
-  return null;
-}
-function getProg(slot) {
-  if (!S.prog[slot.key]) S.prog[slot.key] = { lvl: slot.lvl, kg: 0, bonus: 0, up: 0, down: 0 };
-  const p = S.prog[slot.key];
-  p.lvl = clamp(p.lvl, 0, slot.chain.length - 1);
-  return p;
-}
-function equipOf(parkId) {
-  const p = S.parks.find((x) => x.id === parkId);
-  return p ? p.equip : null; // null = tout le matériel
-}
+/* ================= MATÉRIEL ================= */
+const currentPark = () => S.parks.find((p) => p.id === S.parkLast) || S.parks[0] || null;
+const parkEquip = (parkId) => { const p = S.parks.find((x) => x.id === parkId); return p ? p.equip : null; }; // null = tout
 function canDo(exId, equip) {
   const ex = EXERCISES[exId];
   if (!ex || !ex.needs || !equip) return true;
   return ex.needs.some((group) => group.every((e) => equip.includes(e)));
 }
-// Cherche le premier remplaçant faisable (en largeur, à travers les remplaçants des remplaçants)
 function findSub(exId, equip) {
   const seen = new Set([exId]);
   let queue = [...(EXERCISES[exId].subs || [])];
@@ -37,167 +25,255 @@ function findSub(exId, equip) {
   return null;
 }
 
-function buildItem(slot, equip) {
-  const p = getProg(slot);
-  const wanted = slot.chain[p.lvl];
-  let exId = wanted, origId = null;
-  if (!canDo(wanted, equip)) {
-    const sub = findSub(wanted, equip);
-    if (sub) { exId = sub; origId = wanted; }
+/* ================= RECORDS & MUSCLE-UP ================= */
+const RECORD_TYPES = [
+  { id: "tractions", n: "Tractions", ex: ["traction", "traction_pause", "traction_poitrine"] },
+  { id: "dips", n: "Dips", ex: ["dips", "dips_tempo", "dips_barre"] },
+  { id: "pompes", n: "Pompes", ex: ["pompes"] },
+];
+function recordSeries(type) {
+  const rt = RECORD_TYPES.find((r) => r.id === type), by = {};
+  S.sessions.forEach((s) => s.items.forEach((it) => {
+    if (rt.ex.includes(it.exId) && !(it.kg > 0)) it.sets.forEach((st) => { if (st.done) by[s.d] = Math.max(by[s.d] || 0, st.r); });
+  }));
+  S.records.forEach((r) => { if (r.type === type) by[r.d] = Math.max(by[r.d] || 0, r.v); });
+  return Object.keys(by).sort().map((d) => ({ d, v: by[d] }));
+}
+const bestRecord = (type) => recordSeries(type).reduce((m, p) => Math.max(m, p.v), 0);
+function maxReps(exIds) {
+  let m = 0;
+  S.sessions.forEach((s) => s.items.forEach((it) => { if (exIds.includes(it.exId)) it.sets.forEach((st) => { if (st.done) m = Math.max(m, st.r); }); }));
+  return m;
+}
+// Les 3 portes, dans l'ordre : chacune ne s'ouvre que si la précédente l'est
+function muGates() {
+  const g1 = bestRecord("tractions") >= 10 && bestRecord("dips") >= 10;
+  const g2 = g1 && maxReps(["traction_explosive"]) >= 5;
+  const g3 = g2 && maxReps(["mu_negative"]) >= 3;
+  return [g1, g2, g3, !!S.muscleUp];
+}
+function muStage() { const g = muGates(); let st = 0; while (st < 4 && g[st]) st++; return st; } // 0 à 4
+
+/* ================= PROGRESSION (double progression) ================= */
+function lp(key) {
+  const L = LADDERS[key];
+  if (!S.prog[key]) S.prog[key] = { r: L.start, up: 0, down: 0, stag: 0, tweak: null, kg: 0, noSeed: false };
+  const p = S.prog[key];
+  p.r = clamp(p.r, 0, L.rungs.length - 1);
+  return p;
+}
+const rungOf = (key) => LADDERS[key].rungs[lp(key).r];
+const kgFor = (p, rung) => (rung.weighted ? p.kg || KG_STEP : 0);
+const bottles = (kg) => Math.round(kg / KG_STEP);
+
+function lastHist(key, exId, kg, exceptId) {
+  for (let i = S.sessions.length - 1; i >= 0; i--) {
+    const s = S.sessions[i]; if (s.id === exceptId) continue;
+    const it = s.items.find((x) => x.lad === key && x.exId === exId && !x.origId && !x.volume && (x.kg || 0) === kg && x.sets.some((st) => st.done));
+    if (it) return it;
   }
+  return null;
+}
+// Reps de départ sur l'échelon d'origine : calées sur le niveau connu, avec 1-2 reps de réserve
+function seedReps(key, rung, p) {
+  const L = LADDERS[key];
+  if (!L.rec || p.r !== L.start || p.noSeed) return rung.lo;
+  const lvl = Math.max(S.profile.level[L.rec] || 0, bestRecord(L.rec));
+  return clamp(lvl - 2, rung.lo, rung.hi);
+}
+
+/* Remplace un exercice impossible avec le matériel du parc ; adapte la fourchette si l'unité change (reps ↔ secondes). */
+function substitute(base, equip) {
+  let exId = base.ex, origId = null, { lo, hi } = base, unit = base.unit || EXERCISES[exId].unit || "reps";
+  if (!canDo(exId, equip)) {
+    const sub = findSub(exId, equip);
+    if (sub) {
+      origId = exId; exId = sub;
+      const ex = EXERCISES[sub];
+      const spec = ex.spec || (ex.unit === "s" && unit !== "s" ? { lo: 20, hi: 30, unit: "s" } : ex.unit !== "s" && unit === "s" ? { lo: 8, hi: 12, unit: "reps" } : null);
+      if (spec) { lo = spec.lo; hi = spec.hi; unit = spec.unit; } else unit = ex.unit || unit;
+    }
+  }
+  return { exId, origId, lo, hi, unit };
+}
+function buildLadderItem(slot, equip) {
+  const key = slot.ladder, p = lp(key), rung = LADDERS[key].rungs[p.r];
+  const { exId, origId, lo, hi, unit } = substitute({ ex: rung.ex, lo: rung.lo, hi: rung.hi, unit: rung.unit }, equip);
   const ex = EXERCISES[exId];
-  const it = {
-    key: slot.key, exId, origId, kg: origId ? 0 : p.kg,
-    mode: slot.mode, unit: slot.unit || ex.unit || "reps",
-    lo: slot.lo ? Math.max(1, slot.lo + p.bonus) : 0, hi: slot.hi ? Math.max(1, slot.hi + p.bonus) : 0,
-    cap: slot.cap || 0, rir: slot.rir || "", perSide: !!ex.perSide, sets: [],
-  };
-  if (origId) {
-    if (ex.spec) Object.assign(it, ex.spec);
-    else if (it.unit === "AR" && ex.unit !== "AR") Object.assign(it, { mode: "time", lo: 20, hi: 30, unit: "s" });
-  }
-  const last = lastItem(slot.key, exId, it.kg);
+  const kg = origId ? 0 : kgFor(p, rung);
+  const it = { key: slot.key || key, lad: key, exId, origId, kg, unit, lo, hi, perSide: !!ex.perSide, tweak: origId ? null : p.tweak, volume: !!slot.volume, sets: [] };
+  const last = origId || slot.volume ? null : lastHist(key, exId, kg);
+  const seed = seedReps(key, rung, p);
   for (let i = 0; i < slot.sets; i++) {
-    let r;
-    const prev = last && last.sets[i] && last.sets[i].done ? last.sets[i].r : null;
-    if (it.mode === "max") r = prev != null ? prev : Math.max(1, (slot.def || 8) - i);
-    else if (prev != null) r = clamp(prev + (prev < it.hi ? (it.unit === "s" ? 5 : 1) : 0), Math.min(it.lo, prev), it.hi);
-    else r = it.lo;
-    it.sets.push({ r, done: false });
+    let t;
+    if (slot.volume) t = Math.floor((lo + hi) / 2);
+    else if (last && last.sets[i] && last.sets[i].done) t = clamp(last.sets[i].r + 1, lo, hi);
+    else if (last) { const d = last.sets.filter((s) => s.done).map((s) => s.r); t = clamp((d.length ? d[d.length - 1] : lo) + 1, lo, hi); }
+    else t = seed;
+    it.sets.push({ r: t, t, done: false });
   }
   it.last = last ? last.sets.filter((s) => s.done).map((s) => s.r) : null;
   return it;
 }
+function buildFixedItem(def, key, equip, maxSets) {
+  const sb = substitute({ ex: def.ex || def.fixed, lo: def.lo, hi: def.hi, unit: def.unit }, equip), ex = EXERCISES[sb.exId];
+  const tries = !!def.tries && !sb.origId;
+  const it = { key: key || def.key, lad: null, exId: sb.exId, origId: sb.origId, kg: 0, unit: sb.unit, lo: sb.lo, hi: sb.hi, perSide: !!ex.perSide, volume: false, mu: !!def.mu, tries, sets: [] };
+  const n = maxSets ? Math.min(def.sets, maxSets) : def.sets;
+  for (let i = 0; i < n; i++) { const t = tries ? 0 : sb.lo; it.sets.push({ r: t, t, done: false }); }
+  return it;
+}
+function buildMuItems(max, light, equip) {
+  let items = MU_BLOCKS[Math.min(muStage(), 3)].map((d) => buildFixedItem(Object.assign({ mu: true }, d), null, equip));
+  if (max) items = items.slice(0, max);
+  return items.map((it) => {
+    if (light && it.tries) it.sets = it.sets.slice(0, 4);
+    return it;
+  });
+}
+/* Construit une séance : type S1/S2/S3, équipement du parc, version courte (30 min) ou non */
+function buildSession(type, parkId, short) {
+  const equip = parkId === undefined ? (currentPark() ? currentPark().equip : null) : parkEquip(parkId);
+  const items = [];
+  SESSIONS[type].slots.forEach((slot) => {
+    if (short && !slot.main) return;
+    if (slot.mu) buildMuItems(short ? 1 : slot.max, !SESSIONS[type].heavy, equip).forEach((it) => items.push(it));
+    else if (slot.ladder) items.push(buildLadderItem(short ? Object.assign({}, slot, { sets: Math.min(slot.sets, 3) }) : slot, equip));
+    else if (slot.fixed) items.push(buildFixedItem(slot, slot.key, equip));
+  });
+  return items;
+}
+const restFor = (it) => ((it.mu && (it.exId === "muscle_up" || it.exId === "mu_negative" || it.exId === "mu_transition" || it.exId === "traction_explosive")) || it.kg > 0 || it.exId === "muscle_up" ? Math.max(120, S.profile.rest) : S.profile.rest);
+const estMinutes = (items) => Math.round(5 + sum(items.map((it) => it.sets.length * (0.7 + restFor(it) / 60))));
 
-function buildSession(type, parkId) {
-  const equip = equipOf(parkId);
-  return PROGRAM[type].slots.map((slot) => buildItem(slot, equip));
+const unitSuffix = (it, n) => (it.unit === "s" ? " s" : it.perSide ? " par jambe" : "");
+function targetsLabel(it) {
+  const t = it.sets.map((s) => s.t != null ? s.t : s.r), n = t.length;
+  if (it.tries) return `${n} essais`;
+  if (t.every((x) => x === t[0])) return `${n} × ${t[0]}${unitSuffix(it)}`;
+  return `${n} séries : ${t.join(" · ")}${unitSuffix(it)}`;
+}
+function rangeLabel(it) { return it.lo === it.hi ? `${it.hi}` : `${it.lo}-${it.hi}`; }
+const tweakText = (tw) => (tw === "pause" ? "Avec 2 s de pause en bas" : tw === "tempo" ? "Descente lente en 3 s" : "");
+
+/* Évalue une séance terminée (déjà ajoutée à S.sessions) et applique les règles. Retourne les notes « La prochaine fois ». */
+function evaluateSession(sess) {
+  const notes = [];
+  sess.items.forEach((it) => {
+    const name = EXERCISES[it.exId].n;
+    if (it.mu) { notes.push(muNote(it, name)); return; }
+    if (!it.lad || it.origId || it.volume) {
+      if (it.origId) notes.push({ exId: it.exId, kind: "same", text: `${name} : exercice adapté au parc, la progression n'est pas modifiée.` });
+      return;
+    }
+    const vals = it.sets.filter((s) => s.done).map((s) => s.r);
+    if (!vals.length) return;
+    const key = it.lad, L = LADDERS[key], p = lp(key), rung = L.rungs[p.r];
+    if (rung.ex !== it.exId) return;
+    const total = sum(vals), prev = lastHist(key, it.exId, it.kg || 0, sess.id);
+    const prevTotal = prev ? sum(prev.sets.filter((s) => s.done).map((s) => s.r)) : -1;
+    const top = vals.length >= it.sets.length && it.sets.every((s) => s.done && s.r >= it.hi);
+    const miss = total / vals.length < it.lo;
+    p.up = top ? p.up + 1 : 0;
+    p.down = miss ? p.down + 1 : 0;
+    p.stag = top || miss || total > prevTotal ? 0 : p.stag + 1;
+    let kind = "same", text;
+    if (p.up >= 2) {
+      if (rung.weighted && p.kg < KG_MAX) {
+        p.kg = Math.min(KG_MAX, (p.kg || KG_STEP) + KG_STEP); p.up = p.down = p.stag = 0; kind = "up";
+        text = `On ajoute du poids : sac à dos avec ${bottles(p.kg)} bouteille${bottles(p.kg) > 1 ? "s" : ""} d'eau de 1,5 L (${fmtKg(p.kg)} kg).`;
+      } else if (p.r < L.rungs.length - 1) {
+        p.r++; p.up = p.down = p.stag = 0; p.tweak = null; p.noSeed = true;
+        if (L.rungs[p.r].weighted) p.kg = KG_STEP;
+        kind = "up"; text = `Variante suivante : ${EXERCISES[L.rungs[p.r].ex].n}, on repart au bas de la fourchette.`;
+      } else { p.up = 0; text = "Tu es tout en haut de cette échelle : continue à gagner des reps proprement."; }
+    } else if (p.down >= 2 && p.r > 0) {
+      p.r--; p.up = p.down = p.stag = 0; p.tweak = null; p.noSeed = true; if (!L.rungs[p.r].weighted) p.kg = 0;
+      kind = "down"; text = `On revient sur ${EXERCISES[L.rungs[p.r].ex].n} le temps de consolider. C'est normal, tu y retourneras vite.`;
+    } else if (p.stag >= 3) {
+      p.tweak = p.tweak === "pause" ? "tempo" : p.tweak === "tempo" ? null : "pause"; p.stag = 0; kind = "tweak";
+      text = p.tweak ? `On change un détail pour relancer la progression : ${tweakText(p.tweak).toLowerCase()}.` : "On retire la consigne de tempo pour varier.";
+    }
+    const next = buildLadderItem({ ladder: key, sets: it.sets.length, key: it.key }, null);
+    notes.push({ exId: next.exId, kind, text: `${EXERCISES[next.exId].n} : ${targetsLabel(next)}${next.kg ? ` (+${fmtKg(next.kg)} kg)` : ""}.${text ? " " + text : ""}` });
+  });
+  return notes;
+}
+function muNote(it, name) {
+  const st = muStage(), g = muGates();
+  if (it.origId) return { exId: it.exId, kind: "same", text: `${name} : exercice adapté au matériel du parc, la piste muscle-up n'est pas modifiée.` };
+  if (it.tries) return { exId: it.exId, kind: "same", text: S.muscleUp ? "Muscle-up validé : garde 4 à 6 essais frais en début de séance pour l'entretenir." : "Essais de muscle-up : frais, en début de séance, 5 à 8 essais seuls. On arrête dès que la technique se dégrade." };
+  if (it.exId === "traction_explosive") return { exId: it.exId, kind: "same", text: g[1] ? "Tractions explosives : porte 2 passée." : st >= 1 ? "Tractions explosives : vise 5 reps où la poitrine touche la barre (porte 2)." : "Tractions explosives : le plus haut possible, 3 reps rapides par série (porte 1 d'abord : 10 tractions + 10 dips)." };
+  if (it.exId === "mu_negative") return { exId: it.exId, kind: "same", text: g[2] ? "Négatives de muscle-up : porte 3 passée, place aux essais !" : "Négatives de muscle-up : vise 3 négatives contrôlées sur 5 secondes (porte 3)." };
+  return { exId: it.exId, kind: "same", text: `${name} : même objectif la prochaine fois.` };
 }
 
-function lastItem(key, exId, kg) {
-  for (let i = S.sessions.length - 1; i >= 0; i--) {
-    const it = S.sessions[i].items.find((x) => x.key === key && x.exId === exId && (kg == null || (x.kg || 0) === kg));
-    if (it && it.sets.some((s) => s.done)) return it;
+/* ================= SEMAINE D'ENTRAÎNEMENT ================= */
+const isHeavy = (type) => !!(SESSIONS[type] && SESSIONS[type].heavy);
+function permutations(a) { if (a.length <= 1) return [a]; return a.flatMap((x, i) => permutations([...a.slice(0, i), ...a.slice(i + 1)]).map((p) => [x, ...p])); }
+/* Répartit S1/S2/S3 sur des jours triés. fixed[i] = type déjà imposé (séance déjà faite) ou null.
+   Règle : jamais deux séances lourdes sur deux jours consécutifs (S3 = séance légère). */
+function assignTypes(dates, fixed) {
+  const used = fixed.filter(Boolean), free = ["S1", "S2", "S3"].filter((t) => !used.includes(t));
+  const heavyBefore = S.sessions.some((s) => s.d === addDays(dates[0], -1) && isHeavy(s.type));
+  let best = null, bs = Infinity;
+  permutations(free).forEach((perm) => {
+    let k = 0; const types = fixed.map((f) => f || perm[k++]);
+    let viol = heavyBefore && isHeavy(types[0]) ? 1 : 0;
+    for (let i = 1; i < dates.length; i++) if (daysBetween(dates[i - 1], dates[i]) === 1 && isHeavy(types[i - 1]) && isHeavy(types[i])) viol++;
+    let inv = 0; for (let i = 0; i < types.length; i++) for (let j = i + 1; j < types.length; j++) if (types[i] > types[j]) inv++;
+    const score = viol * 100 + inv;
+    if (score < bs) { bs = score; best = types; }
+  });
+  return best;
+}
+function consecutiveNote(slots) {
+  const sorted = [...slots].sort((a, b) => (a.d < b.d ? -1 : 1));
+  for (let i = 1; i < sorted.length; i++) {
+    if (daysBetween(sorted[i - 1].d, sorted[i].d) === 1) {
+      const light = [sorted[i - 1], sorted[i]].find((s) => s.type === "S3") || sorted[i];
+      return `Tes deux jours se suivent : la séance du ${dayName(light.d)} est la séance technique, plus légère.`;
+    }
   }
-  return null;
-}
-
-const unitLabel = (it, n) => it.unit === "s" ? " s" : it.unit === "AR" ? (n > 1 ? " allers-retours" : " aller-retour") : (it.perSide ? " par jambe" : "");
-function targetLabel(it) {
-  const n = it.sets.length;
-  if (it.mode === "max") return `${n} × max`;
-  const range = it.lo === it.hi ? `${it.hi}` : `${it.lo}-${it.hi}`;
-  return `${n} × ${range}${unitLabel(it, it.hi)}`;
-}
-function targetHint(it) {
-  if (it.mode === "max") return it.rir === "3" ? "Séance légère : arrête-toi 3 reps avant d'être à fond" : "Garde 1 ou 2 reps en réserve";
-  if (it.unit === "s") return "Tiens la position, respire";
   return "";
 }
-
-// Analyse une séance terminée et prépare les propositions de progression
-function evaluateSession(sess) {
-  const out = [];
-  for (const it of sess.items) {
-    if (it.origId) continue; // exercice remplacé : on ne touche pas à la progression
-    const slot = findSlot(it.key);
-    if (!slot) continue;
-    const p = getProg(slot);
-    const vals = it.sets.filter((s) => s.done).map((s) => s.r);
-    if (!vals.length) continue;
-    const full = vals.length >= slot.sets;
-    let success = false, struggle = false;
-    if (it.mode === "max") {
-      const mx = Math.max(...vals), avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-      success = full && mx >= it.cap && avg >= it.cap - 2;
-      struggle = mx < 3;
-    } else {
-      success = full && vals.every((v) => v >= it.hi);
-      struggle = vals.every((v) => v < it.lo);
-    }
-    p.up = success ? p.up + 1 : 0;
-    p.down = struggle ? p.down + 1 : 0;
-    if (S.pending.some((x) => x.key === slot.key)) continue;
-    if (p.up >= 2) {
-      const prop = makeProposal(slot, p, "up");
-      if (prop) { S.pending.push(prop); out.push(prop); }
-    } else if (p.down >= 2) {
-      const prop = makeProposal(slot, p, "down");
-      if (prop) { S.pending.push(prop); out.push(prop); }
-    }
-  }
-  return out;
-}
-
-function makeProposal(slot, p, dir) {
-  const cur = EXERCISES[slot.chain[p.lvl]].n;
-  const step = slot.step || 2;
-  if (dir === "up") {
-    if (p.lvl < slot.chain.length - 1) {
-      const nx = EXERCISES[slot.chain[p.lvl + 1]].n;
-      return { key: slot.key, dir, kind: "variant", title: `${cur} : maîtrisé !`, text: `Tu as réussi toutes tes séries 2 fois de suite. On passe à une variante plus dure : ${nx}.` };
-    }
-    if (slot.weight && p.kg < KG_MAX) {
-      const nk = p.kg + KG_STEP;
-      return { key: slot.key, dir, kind: "weight", title: `${cur} : maîtrisé !`, text: `Tu as réussi toutes tes séries 2 fois de suite. On ajoute du poids : sac à dos avec ${Math.round(nk / 1.5)} bouteille${nk > 1.5 ? "s" : ""} d'eau de 1,5 L (${fmtKg(nk)} kg en tout).` };
-    }
-    if (slot.mode !== "max" && !slot.noBonus) {
-      return { key: slot.key, dir, kind: "reps", title: `${cur} : maîtrisé !`, text: `On monte la cible : ${slot.lo + p.bonus + step === slot.hi + p.bonus + step ? slot.hi + p.bonus + step : `${slot.lo + p.bonus + step}-${slot.hi + p.bonus + step}`}${slot.unit === "s" ? " s" : " reps"} par série.` };
-    }
-    return null;
-  }
-  if (p.kg > 0) return { key: slot.key, dir, kind: "weight", title: `${cur} : on ajuste`, text: `On enlève une bouteille du sac pour retrouver de belles reps propres. C'est comme ça qu'on progresse le plus vite.` };
-  if (p.lvl > 0) {
-    const pv = EXERCISES[slot.chain[p.lvl - 1]].n;
-    return { key: slot.key, dir, kind: "variant", title: `${cur} : on ajuste`, text: `On repasse sur ${pv} quelques séances pour construire la force, puis on y revient. Tout le monde passe par là.` };
-  }
-  if (slot.mode !== "max" && slot.lo + p.bonus - step >= 1) {
-    return { key: slot.key, dir, kind: "reps", title: `${cur} : on ajuste`, text: `On baisse un peu la cible pour que chaque rep soit propre. Tu remonteras vite.` };
-  }
-  return null;
-}
-
-function answerProposal(key, accept) {
-  const i = S.pending.findIndex((x) => x.key === key);
-  if (i < 0) return;
-  const prop = S.pending[i];
-  const slot = findSlot(key), p = getProg(slot), step = slot.step || 2, sign = prop.dir === "up" ? 1 : -1;
-  if (accept) {
-    if (prop.kind === "variant") { p.lvl = clamp(p.lvl + sign, 0, slot.chain.length - 1); p.bonus = 0; }
-    else if (prop.kind === "weight") p.kg = clamp(p.kg + sign * KG_STEP, 0, KG_MAX);
-    else p.bonus += sign * step;
-    p.up = 0; p.down = 0;
-  } else {
-    p.up = Math.min(p.up, 1); p.down = Math.min(p.down, 1);
-  }
-  S.pending.splice(i, 1);
+const weekPlan = (wk) => S.weeks[wk] || null;
+function generateWeek(wk, dates) {
+  dates = [...new Set(dates)].sort();
+  if (dates.length !== 3) throw new Error("Choisis exactement 3 jours.");
+  if (dates.some((d) => weekKey(d) !== wk)) throw new Error("Les jours doivent être dans la même semaine.");
+  const types = assignTypes(dates, [null, null, null]);
+  const slots = dates.map((d, i) => ({ d, type: types[i], done: null }));
+  S.weeks[wk] = { slots, msg: consecutiveNote(slots), at: today() };
+  generateMeals(wk);
+  S.shop[wk] = {};
+  Object.keys(S.weeks).forEach((k) => { if (daysBetween(k, wk) > 56) delete S.weeks[k]; });
   saveState();
+  return S.weeks[wk];
 }
-
-/* ================= PLANNING ================= */
-const sessionsOn = (d) => S.sessions.filter((s) => s.d === d);
+function moveSlot(wk, idx, newDate) {
+  const W = S.weeks[wk]; if (!W) return false;
+  const sl = W.slots[idx];
+  if (!sl || sl.done || weekKey(newDate) !== wk || W.slots.some((s, i) => i !== idx && s.d === newDate)) return false;
+  sl.d = newDate;
+  const order = W.slots.map((s, i) => i).sort((a, b) => (W.slots[a].d < W.slots[b].d ? -1 : 1));
+  const sorted = order.map((i) => W.slots[i]);
+  const types = assignTypes(sorted.map((s) => s.d), sorted.map((s) => (s.done ? s.type : null)));
+  sorted.forEach((s, i) => { if (!s.done) s.type = types[i]; });
+  W.slots = sorted; W.msg = consecutiveNote(W.slots);
+  saveState();
+  return true;
+}
+function todayState() {
+  const wk = weekKey(today()), W = S.weeks[wk];
+  if (!W) return { status: "noplan", wk };
+  const idx = W.slots.findIndex((s) => s.d === today());
+  if (idx < 0) return { status: "rest", wk, W };
+  const sl = W.slots[idx];
+  return { status: sl.done ? "done" : "train", wk, W, slot: sl, idx, n: idx + 1 };
+}
 const sessionsInWeek = (wk) => S.sessions.filter((s) => weekKey(s.d) === wk);
-function distinctDaysInWeek(wk) { return new Set(sessionsInWeek(wk).map((s) => s.d)).size; }
-
-function nextFreeType() {
-  const done = sessionsInWeek(weekKey(today())).map((s) => s.type);
-  return ["A", "B", "C"].find((t) => !done.includes(t)) || "A";
-}
-function todayPlan() {
-  const d = today(), wd = parseYmd(d).getDay();
-  const done = sessionsOn(d);
-  if (done.length) return { status: "done", type: done[done.length - 1].type };
-  const type = Object.keys(S.profile.days).find((t) => S.profile.days[t] === wd);
-  if (type) return { status: "train", type };
-  // prochain jour d'entraînement
-  let next = null;
-  for (let i = 1; i <= 7 && !next; i++) {
-    const w = (wd + i) % 7;
-    const t = Object.keys(S.profile.days).find((k) => S.profile.days[k] === w);
-    if (t) next = { type: t, in: i, day: DAYS_JS_FR[w] };
-  }
-  return { status: "rest", type: nextFreeType(), next };
-}
+const distinctDaysInWeek = (wk) => new Set(sessionsInWeek(wk).map((s) => s.d)).size;
 function streakWeeks() {
   let wk = weekKey(today()), n = 0;
   if (distinctDaysInWeek(wk) >= 3) n++;
@@ -210,148 +286,169 @@ function hasFullWeek() {
   S.sessions.forEach((s) => { const k = weekKey(s.d); (weeks[k] = weeks[k] || new Set()).add(s.d); });
   return Object.values(weeks).some((set) => set.size >= 3);
 }
-
-/* ================= RECORDS ================= */
-const RECORD_TYPES = [
-  { id: "tractions", n: "Tractions", ex: ["traction"] },
-  { id: "dips", n: "Dips", ex: ["dips"] },
-  { id: "pompes", n: "Pompes", ex: ["pompes"] },
-];
-function recordSeries(type) {
-  const rt = RECORD_TYPES.find((r) => r.id === type), by = {};
-  S.sessions.forEach((s) => s.items.forEach((it) => {
-    if (rt.ex.includes(it.exId) && !(it.kg > 0)) it.sets.forEach((st) => { if (st.done) by[s.d] = Math.max(by[s.d] || 0, st.r); });
-  }));
-  S.records.forEach((r) => { if (r.type === type) by[r.d] = Math.max(by[r.d] || 0, r.v); });
-  return Object.keys(by).sort().map((d) => ({ d, v: by[d] }));
-}
-const bestRecord = (type) => recordSeries(type).reduce((m, p) => Math.max(m, p.v), 0);
+/* Jours proposés pour la semaine suivante quand la semaine a été chargée (moins de 2 séances) : jours bien espacés */
+const EASY_DAYS = [0, 2, 5]; // lundi, mercredi, samedi
 
 /* ================= POIDS ================= */
 const sortedWeights = () => [...S.weights].sort((a, b) => (a.d < b.d ? -1 : 1));
 function curKg() { const w = sortedWeights(); return w.length ? w[w.length - 1].kg : S.profile.startKg; }
-function weightBefore(dateStr) { // dernière pesée à cette date ou avant
-  const w = sortedWeights().filter((x) => x.d <= dateStr);
-  return w.length ? w[w.length - 1] : null;
+const startKg = () => (S.profile.startKg != null ? S.profile.startKg : (sortedWeights()[0] || { kg: null }).kg);
+const weighDue = () => { const w = sortedWeights(); return !w.length || daysBetween(w[w.length - 1].d, today()) >= 6; };
+function windowMean(from, to) { // pesées dont l'âge (en jours) est entre from et to : moyenne du poids et de l'âge
+  const ws = S.weights.filter((x) => { const a = daysBetween(x.d, today()); return a >= from && a <= to; });
+  return ws.length ? { kg: sum(ws.map((x) => x.kg)) / ws.length, age: sum(ws.map((x) => daysBetween(x.d, today()))) / ws.length, n: ws.length } : null;
 }
+const lastBumpAge = () => (S.kcalBumps.length ? daysBetween(S.kcalBumps[S.kcalBumps.length - 1], today()) : Infinity);
+/* Rythme mensuel calculé sur des MOYENNES de pesées : les 10 derniers jours contre les jours 18 à 27. */
 function weightAdvice() {
-  const w = sortedWeights();
-  if (!w.length) return { kind: "start", text: "Pèse-toi une fois par semaine, le matin au réveil. C'est tout ce qu'il faut pour suivre ta progression." };
-  const last = w[w.length - 1];
-  const sinceLast = daysBetween(last.d, today());
-  const ref21 = weightBefore(addDays(last.d, -21));
-  const lastBump = S.kcalBumps.length ? S.kcalBumps[S.kcalBumps.length - 1] : null;
-  const bumpedRecently = lastBump && daysBetween(lastBump, today()) < 21;
-  if (ref21 && last.kg - ref21.kg < 0.2 && sinceLast <= 14) {
-    if (bumpedRecently) return { kind: "wait", text: "Ton poids est stable, mais tu viens d'ajouter des calories : laisse 3 semaines au corps pour répondre. Continue comme ça." };
-    return { kind: "stagnation", canBump: true, text: "Ton poids n'a pas bougé depuis 3 semaines. Rien de grave, ça arrive à tout le monde : il suffit d'ajouter 200 à 300 kcal par jour, par exemple un shake de plus ou un grand verre de lait au cacao." };
+  if (!S.weights.length) return { kind: "start", text: "Pèse-toi le dimanche matin au réveil. Une fois par semaine suffit." };
+  const R = windowMean(0, 9), B = windowMean(18, 27);
+  if (!R) return { kind: "weigh", text: "Pèse-toi ce matin au réveil pour faire le point de la semaine." };
+  if (!B || B.age - R.age < 10) return { kind: "start", text: "Continue à te peser chaque dimanche : après 3 semaines, je pourrai calculer ton rythme." };
+  const perMonth = ((R.kg - B.kg) / (B.age - R.age)) * 30;
+  const r = { perMonth };
+  if (perMonth < 0.5) {
+    if (lastBumpAge() < 21) return Object.assign(r, { kind: "wait", text: `Je viens d'augmenter tes portions (${S.profile.kcal} kcal par jour). Laisse 3 semaines au corps pour répondre : continue comme ça.` });
+    return Object.assign(r, { kind: "low", text: "Ton poids avance doucement. Rien de grave : j'ajoute environ 250 kcal par jour à tes repas (un shake ou une collation en plus)." });
   }
-  const ref28 = weightBefore(addDays(last.d, -28));
-  if (ref28) {
-    const span = daysBetween(ref28.d, last.d), perMonth = ((last.kg - ref28.kg) / span) * 30;
-    if (perMonth < 0.5) return { kind: "slow", canBump: !bumpedRecently, text: `Environ +${fmtKg(Math.max(0, perMonth))} kg sur le dernier mois. Tu avances ! Pour accélérer un peu, le plus simple : ne saute pas le petit-déj et bois ton shake tous les jours.` };
-    if (perMonth <= 1.2) return { kind: "good", text: `Environ +${fmtKg(perMonth)} kg sur le dernier mois : c'est exactement le bon rythme. Ne change rien.` };
-    return { kind: "fast", text: `Environ +${fmtKg(perMonth)} kg sur le dernier mois : ça monte vite, bravo. Garde le même plan, pas besoin d'ajouter.` };
-  }
-  return { kind: "start", text: "Rythme visé : +0,5 à 1 kg par mois. Continue de te peser une fois par semaine, le matin au réveil." };
+  if (perMonth <= 1.5) return Object.assign(r, { kind: "good", text: "C'est le bon rythme, continue." });
+  if (perMonth <= 2) return Object.assign(r, { kind: "good", text: "C'est un peu au-dessus du rythme visé, mais bien. Continue comme ça." });
+  return Object.assign(r, { kind: "fast", text: "Ça monte vite, bravo. Garde le même plan." });
 }
 function bumpKcal() {
-  S.profile.kcal += 250;
+  S.profile.kcal = Math.max(S.profile.kcalBase, S.profile.kcal) + KCAL_STEP;
   S.kcalBumps.push(today());
+  Object.keys(S.plans).forEach((wk) => { if (wk >= weekKey(today())) updateBoosts(wk); });
   saveState();
 }
-function measureDue() {
-  if (!S.measures.length) return true;
-  const last = [...S.measures].sort((a, b) => (a.d < b.d ? -1 : 1)).pop();
-  return daysBetween(last.d, today()) >= 30;
+/* À appeler à chaque pesée : applique la règle et retourne la consigne. Jamais de baisse des calories. */
+function applyWeightRule() {
+  let a = weightAdvice();
+  if (a.kind === "low") { bumpKcal(); a = Object.assign({}, a, { bumped: true }); }
+  return a;
 }
-const weighDue = () => { const w = sortedWeights(); return !w.length || daysBetween(w[w.length - 1].d, today()) >= 7; };
+const lastMeasure = () => [...S.measures].sort((a, b) => (a.d < b.d ? -1 : 1)).pop();
+const measureDue = () => { const m = lastMeasure(); return !m || daysBetween(m.d, today()) >= 30; };
+const photoDue = () => S.sessions.length > 0 && !S.photos.some((p) => p.ym === today().slice(0, 7));
 
 /* ================= REPAS ================= */
 const mealById = (id) => (id === "shake" ? SHAKE : MEALS.find((m) => m.id === id));
-const isHomeDay = (di) => di >= 5 || S.profile.holiday;
+const eatenName = (id) => (id === "other" ? "Autre chose" : (mealById(id) || { n: "" }).n);
 function eligibleMeals(slot, di) {
-  const all = MEALS.filter((m) => m.slot === slot);
-  if (slot !== "midi") return all;
-  return isHomeDay(di) ? all.filter((m) => m.where === "maison").concat(all.filter((m) => m.where === "any")) : all.filter((m) => m.where === "any");
+  let list = MEALS.filter((m) => m.slot === slot && S.likes[m.id] !== -1);
+  if (slot === "midi" && di <= 4) list = list.filter((m) => m.where === "any"); // lycée : ni frigo ni micro-ondes
+  return list.length ? list : MEALS.filter((m) => m.slot === slot);
 }
-function ensurePlan(wk) {
-  if (S.plans[wk]) return S.plans[wk];
-  const wn = Math.round(daysBetween("2026-01-05", wk) / 7);
-  const plan = {};
+function pickMeal(slot, di, cnt, prevWeekId, yesterdayId, usedLastWeek, wn, exclude) {
+  let list = eligibleMeals(slot, di).filter((m) => !exclude.includes(m.id));
+  if (!list.length) list = eligibleMeals(slot, di);
+  const ok = list.filter((m) => (cnt[m.id] || 0) < 2);
+  if (ok.length) list = ok;
+  let best = null, bs = Infinity;
+  list.forEach((m, i) => {
+    const s = (cnt[m.id] || 0) * 10 + (prevWeekId === m.id ? 8 : 0) + (yesterdayId === m.id ? 6 : 0) + (usedLastWeek.has(m.id) ? 3 : 0) +
+      (S.likes[m.id] === 1 ? -4 : 0) + ((i + wn * 3 + di * 2) % list.length) / list.length;
+    if (s < bs) { bs = s; best = m; }
+  });
+  return best;
+}
+function boostsFor(di) {
+  const n = clamp(Math.round((S.profile.kcal - KCAL_BASE_PLAN) / KCAL_STEP), 0, 3);
+  return Array.from({ length: n }, (_, k) => (di + k) % BOOSTERS.length);
+}
+function updateBoosts(wk) { const P = S.plans[wk]; if (P) for (let di = 0; di < 7; di++) P.days[di].boost = boostsFor(di); }
+const planSlots = ["matin", "midi", "gouter", "soir", "coll"];
+function generateMeals(wk) {
+  const prev = S.plans[addDays(wk, -7)], wn = Math.round(daysBetween("2026-01-05", wk) / 7);
+  const usedLastWeek = new Set(); if (prev) for (let di = 0; di < 7; di++) planSlots.forEach((sl) => usedLastWeek.add(prev.days[di][sl]));
+  const cnt = {}, days = {};
   for (let di = 0; di < 7; di++) {
-    plan[di] = {};
-    MEAL_SLOTS.forEach((sl, si) => {
-      let list = eligibleMeals(sl.id, di);
-      if (sl.id === "midi" && isHomeDay(di)) list = list.filter((m) => m.where === "maison");
-      plan[di][sl.id] = list[(((wn * 2 + di + si) % list.length) + list.length) % list.length].id;
+    days[di] = {};
+    planSlots.forEach((sl) => {
+      const m = pickMeal(sl, di, cnt, prev ? prev.days[di][sl] : null, di ? days[di - 1][sl] : null, usedLastWeek, wn, []);
+      days[di][sl] = m.id; cnt[m.id] = (cnt[m.id] || 0) + 1;
+    });
+    days[di].boost = boostsFor(di);
+  }
+  S.plans[wk] = { days, at: today() };
+  Object.keys(S.plans).forEach((k) => { if (daysBetween(k, wk) > 28) { delete S.plans[k]; delete S.shop[k]; } });
+  return S.plans[wk];
+}
+function ensurePlan(wk) { if (!S.plans[wk]) { generateMeals(wk); saveState(); } return S.plans[wk]; }
+const planCount = (wk) => { const c = {}; const P = S.plans[wk]; for (let di = 0; di < 7; di++) planSlots.forEach((sl) => { c[P.days[di][sl]] = (c[P.days[di][sl]] || 0) + 1; }); return c; };
+function replaceMeal(wk, di, slot, exclude) {
+  const P = ensurePlan(wk), cnt = planCount(wk), cur = P.days[di][slot];
+  cnt[cur]--;
+  const wn = Math.round(daysBetween("2026-01-05", wk) / 7);
+  const m = pickMeal(slot, di, cnt, null, null, new Set(), wn + 1, (exclude || []).concat(cur));
+  P.days[di][slot] = m.id; saveState(); return m;
+}
+const swapMeal = (wk, di, slot) => replaceMeal(wk, di, slot, []);
+function setLike(id, v) {
+  S.likes[id] = S.likes[id] === v ? 0 : v;
+  if (S.likes[id] === -1) { // « Plus jamais » : disparaît des plans en cours et à venir
+    Object.keys(S.plans).forEach((wk) => {
+      if (wk < weekKey(today())) return;
+      for (let di = 0; di < 7; di++) planSlots.forEach((sl) => { if (S.plans[wk].days[di][sl] === id) replaceMeal(wk, di, sl, [id]); });
     });
   }
-  S.plans[wk] = plan;
-  // ménage : on ne garde que les plans récents
-  Object.keys(S.plans).forEach((k) => { if (daysBetween(k, wk) > 21) { delete S.plans[k]; delete S.shop[k]; } });
   saveState();
-  return plan;
 }
-function swapMeal(wk, di, slot) {
-  const plan = ensurePlan(wk), list = eligibleMeals(slot, di);
-  const i = list.findIndex((m) => m.id === plan[di][slot]);
-  plan[di][slot] = list[(i + 1) % list.length].id;
-  saveState();
+function alternatives(wk, di, slot, n = 2) {
+  const P = ensurePlan(wk), cur = P.days[di][slot], cnt = planCount(wk);
+  return eligibleMeals(slot, di).filter((m) => m.id !== cur)
+    .map((m, i) => ({ m, s: (cnt[m.id] || 0) * 3 - (S.likes[m.id] === 1 ? 4 : 0) + ((i * 7 + di) % 5) / 10 }))
+    .sort((a, b) => a.s - b.s).slice(0, n).map((x) => x.m);
 }
 function dayMeals(dateStr) {
-  const plan = ensurePlan(weekKey(dateStr))[dayIdx(dateStr)];
-  return MEAL_SLOTS.map((sl) => ({ slot: sl, meal: mealById(plan[sl.id]) }));
+  const P = ensurePlan(weekKey(dateStr)).days[dayIdx(dateStr)];
+  return MEAL_SLOTS.map((sl) => ({ slot: sl, meal: mealById(P[sl.id]) }));
 }
+const dayColl = (dateStr) => mealById(ensurePlan(weekKey(dateStr)).days[dayIdx(dateStr)].coll);
+const dayBoosts = (dateStr) => ensurePlan(weekKey(dateStr)).days[dayIdx(dateStr)].boost.map((i) => BOOSTERS[i]);
 function dayTotals(dateStr) {
-  const ms = dayMeals(dateStr).map((x) => x.meal).concat([SHAKE]);
-  return { kcal: ms.reduce((a, m) => a + m.kcal, 0), prot: ms.reduce((a, m) => a + m.prot, 0) };
-}
-function dayBooster(dateStr) {
-  // le plan de base est construit pour environ 3000 kcal : tout ce qui est au-dessus devient un « bonus »
-  const extra = S.profile.kcal - 3000;
-  if (extra < 120) return null;
-  const picks = []; let left = extra, i = (dayIdx(dateStr) + 1) % BOOSTERS.length, guard = 0;
-  while (left >= 120 && guard++ < 4) { const b = BOOSTERS[i % BOOSTERS.length]; picks.push(b); left -= b.kcal; i++; }
-  return { extra, picks };
-}
-function mealTimes(dateStr) {
-  const t = dayIdx(dateStr) >= 5 ? S.reminders.weekend : S.reminders.week;
-  return MEAL_SLOTS.map((sl, i) => t[i]);
+  const ms = dayMeals(dateStr).map((x) => x.meal).concat([dayColl(dateStr), SHAKE], dayBoosts(dateStr));
+  return { kcal: sum(ms.map((m) => m.kcal)), prot: sum(ms.map((m) => m.prot)) };
 }
 const checksOf = (d) => S.mealChecks[d] || {};
-function toggleMeal(d, slotId) {
-  const c = (S.mealChecks[d] = S.mealChecks[d] || {});
-  if (c[slotId]) delete c[slotId]; else c[slotId] = true;
+function setEaten(d, slot, mealId) { // mealId : id de repas, "other", ou null pour décocher
+  const c = (S.mealChecks[d] = S.mealChecks[d] || {}), e = (S.eaten = S.eaten || {}), ed = (e[d] = e[d] || {});
+  if (mealId) { c[slot] = true; ed[slot] = mealId; } else { delete c[slot]; delete ed[slot]; }
   saveState();
 }
-const isFullDay = (d) => MEAL_SLOTS.every((sl) => checksOf(d)[sl.id]);
-const fullDaysCount = () => Object.keys(S.mealChecks).filter(isFullDay).length;
-function nextMealSlot() {
-  const d = today(), c = checksOf(d), times = mealTimes(d), now = new Date();
-  const cur = pad2(now.getHours()) + ":" + pad2(now.getMinutes());
-  let pick = -1;
-  MEAL_SLOTS.forEach((sl, i) => { if (!c[sl.id] && pick < 0 && times[i] >= shiftTime(cur, -90)) pick = i; });
-  return pick;
+function toggleMeal(d, slot) {
+  if (checksOf(d)[slot]) setEaten(d, slot, null);
+  else { const m = dayMeals(d).find((x) => x.slot.id === slot); setEaten(d, slot, m ? m.meal.id : "other"); }
 }
-function shiftTime(hm, min) {
-  const [h, m] = hm.split(":").map(Number); const t = clamp(h * 60 + m + min, 0, 1439);
-  return pad2(Math.floor(t / 60)) + ":" + pad2(t % 60);
+const mainChecks = (d) => MEAL_SLOTS.filter((sl) => checksOf(d)[sl.id]).length;
+const isFullDay = (d) => mainChecks(d) === MEAL_SLOTS.length;
+const fullDaysCount = () => Object.keys(S.mealChecks).filter(isFullDay).length;
+const weekMealChecks = (wk) => sum(Array.from({ length: 7 }, (_, i) => mainChecks(addDays(wk, i))));
+function mealTimes(dateStr) {
+  const t = dayIdx(dateStr) >= 5 ? S.reminders.weekend : S.reminders.week;
+  return [t[0], t[1], t[2], t[3]];
+}
+function currentSlotIdx(nowHM) { // moment de la journée : premier repas non coché dont l'heure n'est pas dépassée de plus de 90 min
+  const d = today(), c = checksOf(d), times = mealTimes(d);
+  const cut = (hm) => { const [h, m] = hm.split(":").map(Number); const t = clamp(h * 60 + m - 90, 0, 1439); return pad2(Math.floor(t / 60)) + ":" + pad2(t % 60); };
+  const idx = MEAL_SLOTS.findIndex((sl, i) => !c[sl.id] && times[i] >= cut(nowHM));
+  return idx < 0 ? MEAL_SLOTS.length - 1 : idx;
 }
 
 /* ================= COURSES ================= */
 function fmtQty(ing, q) {
   if (ing.u === "g") return q >= 1000 ? `${fmtKg(q / 1000)} kg` : `${Math.ceil(q / 10) * 10} g`;
   if (ing.u === "ml") return q >= 1000 ? `${fmtKg(q / 1000)} L` : `${Math.ceil(q / 10) * 10} ml`;
-  const n = Math.ceil(q);
+  const n = Math.ceil(q - 1e-9);
   return ing.pk ? `${n} ${ing.pk}` : `${n}`;
 }
 function shoppingList(wk) {
-  const plan = ensurePlan(wk), tot = {};
+  const P = ensurePlan(wk), tot = {};
   const add = (ing) => ing.forEach(([id, q]) => { tot[id] = (tot[id] || 0) + q; });
   for (let di = 0; di < 7; di++) {
-    MEAL_SLOTS.forEach((sl) => { const m = mealById(plan[di][sl.id]); if (m) add(m.ing); });
+    planSlots.forEach((sl) => add(mealById(P.days[di][sl]).ing));
     add(SHAKE.ing);
+    P.days[di].boost.forEach((i) => add(BOOSTERS[i].ing));
   }
   return RAYONS.map((r) => ({
     rayon: r,
@@ -369,37 +466,17 @@ function shoppingText(wk) {
   return t;
 }
 
-/* ================= XP, NIVEAUX, BADGES ================= */
-function xpTotal() {
-  let checks = 0;
-  Object.values(S.mealChecks).forEach((c) => { checks += Object.keys(c).length; });
-  return S.sessions.length * 100 + checks * 5 + fullDaysCount() * 25 + S.weights.length * 15 +
-    S.measures.length * 10 + S.photos.length * 20 + Object.keys(S.badges).length * 50;
-}
-const xpFor = (lvl) => 150 * lvl * (lvl - 1);
-function levelInfo() {
-  const xp = xpTotal(); let lvl = 1;
-  while (xpFor(lvl + 1) <= xp) lvl++;
-  const a = xpFor(lvl), b = xpFor(lvl + 1);
-  return { xp, lvl, name: LEVEL_NAMES[Math.min(LEVEL_NAMES.length - 1, Math.floor((lvl - 1) / 2))], pct: Math.round(((xp - a) / (b - a)) * 100), next: b - xp };
-}
+/* ================= BADGES ================= */
 function checkBadges() {
-  const gain = curKg() - S.profile.startKg;
-  const anySet = (exIds, min) => S.sessions.some((s) => s.items.some((it) => exIds.includes(it.exId) && it.sets.some((st) => st.done && st.r >= min)));
+  const gain = S.weights.length && startKg() != null ? curKg() - startKg() : 0, g = muGates();
   const cond = {
-    first: S.sessions.length >= 1,
-    week3: hasFullWeek(),
-    streak4: streakWeeks() >= 4,
+    first: S.sessions.length >= 1, week3: hasFullWeek(), streak4: streakWeeks() >= 4,
     s10: S.sessions.length >= 10, s25: S.sessions.length >= 25, s50: S.sessions.length >= 50,
+    g1: g[0], g2: g[1], g3: g[2], mu: g[3],
     pull15: bestRecord("tractions") >= 15, dips20: bestRecord("dips") >= 20, push30: bestRecord("pompes") >= 30,
-    lsit15: anySet(["lsit"], 15),
-    mu: !!S.muscleUp,
-    kg1: S.weights.length > 0 && gain >= 1, kg5: S.weights.length > 0 && gain >= 5,
-    goal3: S.weights.length > 0 && curKg() >= S.profile.goal3Kg - 0.5,
-    goal: S.weights.length > 0 && curKg() >= S.profile.goalKg,
-    meals7: fullDaysCount() >= 7,
-    photo: S.photos.length >= 1,
-    park: S.parks.length >= 2,
+    kg1: gain >= 1, kg5: gain >= 5,
+    goal3: S.weights.length > 0 && curKg() >= S.profile.goal3Kg - 0.5, goal: S.weights.length > 0 && curKg() >= S.profile.goalKg,
+    meals7: fullDaysCount() >= 7, photo: S.photos.length >= 1,
   };
   const fresh = [];
   BADGES.forEach((b) => { if (cond[b.id] && !S.badges[b.id]) { S.badges[b.id] = today(); fresh.push(b); } });
@@ -410,7 +487,7 @@ function checkBadges() {
 /* ================= RAPPELS (.ics) ================= */
 function reminderLabels() {
   const med = S.profile.med ? ` (avant ${S.profile.medName ? "ton " + S.profile.medName : "ton médicament"})` : "";
-  return [`Petit-déj${med} — le plus gros possible`, "Midi — même petit, mange ou bois quelque chose", "Goûter — vrai repas", "Dîner", "Collation avant de dormir"];
+  return [`Matin${med} — le plus gros repas possible`, "Midi — même petit, mange ou bois quelque chose", "Goûter — vrai repas", "Soir — gros dîner", "Collation avant de dormir"];
 }
 function remindersIcs() {
   const labels = reminderLabels();

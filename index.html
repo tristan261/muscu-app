@@ -14,11 +14,10 @@
 <body>
   <main id="view"></main>
   <nav id="tabs" hidden>
-    <a href="#/home" data-tab="home"><span>🏠</span>Accueil</a>
+    <a href="#/today" data-tab="today"><span>🏠</span>Aujourd'hui</a>
     <a href="#/seance" data-tab="seance"><span>💪</span>Séance</a>
-    <a href="#/repas" data-tab="repas"><span>🍽️</span>Repas</a>
-    <a href="#/suivi" data-tab="suivi"><span>📈</span>Suivi</a>
-    <a href="#/plus" data-tab="plus"><span>☰</span>Plus</a>
+    <a href="#/bilan" data-tab="bilan"><span>📈</span>Bilan</a>
+    <a href="#/manger" data-tab="manger"><span>🍽️</span>Manger</a>
   </nav>
   <div id="session" hidden></div>
   <div id="sheet" hidden><div id="sheet-box"></div></div>
@@ -34,7 +33,15 @@
   <script>
     boot();
     if ("serviceWorker" in navigator) {
+      const had = !!navigator.serviceWorker.controller;
       window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+      // Nouvelle version installée : on recharge une seule fois, sauf pendant une séance
+      let reloaded = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (!had || reloaded) return;
+        reloaded = true;
+        if (!S.current) location.reload();
+      });
     }
   </script>
 </body>

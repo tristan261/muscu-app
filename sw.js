@@ -1,5 +1,5 @@
 /* FORGE — service worker : l'app fonctionne hors connexion */
-const CACHE = "forge-v1";
+const CACHE = "forge-v2";
 const ASSETS = [
   "./", "index.html", "style.css", "manifest.webmanifest",
   "js/data.js", "js/store.js", "js/logic.js", "js/ui.js", "js/session.js",
@@ -7,7 +7,7 @@ const ASSETS = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) => Promise.all(ASSETS.map((u) => c.add(new Request(u, { cache: "reload" }))))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (e) => {
