@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>FORGE — Street workout</title>
+  <meta name="description" content="Suivi street workout et alimentation, hors connexion.">
+  <meta name="theme-color" content="#0b0d10">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="view"></main>
+  <nav id="tabs" hidden>
+    <a href="#/home" data-tab="home"><span>🏠</span>Accueil</a>
+    <a href="#/seance" data-tab="seance"><span>💪</span>Séance</a>
+    <a href="#/repas" data-tab="repas"><span>🍽️</span>Repas</a>
+    <a href="#/suivi" data-tab="suivi"><span>📈</span>Suivi</a>
+    <a href="#/plus" data-tab="plus"><span>☰</span>Plus</a>
+  </nav>
+  <div id="session" hidden></div>
+  <div id="sheet" hidden><div id="sheet-box"></div></div>
+  <div id="toast" hidden></div>
+  <input type="file" id="file-img" accept="image/*" hidden>
+  <input type="file" id="file-json" accept="application/json,.json" hidden>
+
+  <script src="js/data.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/logic.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/session.js"></script>
+  <script>
+    boot();
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+    }
+  </script>
+</body>
+</html>
