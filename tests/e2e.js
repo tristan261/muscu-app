@@ -3,7 +3,7 @@ const { chromium } = require('playwright');
 const assert = require('assert');
 const URL = 'http://localhost:8123/index.html';
 (async () => {
-  const b = await chromium.launch();
+  const b = await chromium.launch({ executablePath: process.env.CHROME || undefined });
   for (const width of [390, 360]) {
     const ctx = await b.newContext({ viewport: { width, height: 844 }, locale: 'fr-FR', hasTouch: true, isMobile: true });
     const p = await ctx.newPage(); const errors = [];

@@ -101,7 +101,7 @@ function buildLadderItem(slot, equip) {
   const { exId, origId, lo, hi, unit } = substitute({ ex: rung.ex, lo: rung.lo, hi: rung.hi, unit: rung.unit }, equip);
   const ex = EXERCISES[exId];
   const kg = origId ? 0 : kgFor(p, rung);
-  const it = { key: slot.key || key, lad: key, rg: p.r, exId, origId, kg, unit, lo, hi, perSide: !!ex.perSide, tweak: origId ? null : p.tweak, volume: !!slot.volume, planned: slot.sets, sets: [] };
+  const it = { key: slot.key || key, lad: key, rg: p.r, exId, origId, kg, unit, lo, hi, perSide: !!ex.perSide, tweak: origId ? null : p.tweak, volume: !!slot.volume, fin: !!slot.fin, planned: slot.sets, sets: [] };
   const last = origId || slot.volume ? null : lastHist(key, exId, kg);
   const seed = seedReps(key, rung, p);
   for (let i = 0; i < slot.sets; i++) {
@@ -143,7 +143,11 @@ function buildSession(type, parkId, short) {
   });
   return items;
 }
-const restFor = (it) => ((it.mu && (it.exId === "muscle_up" || it.exId === "mu_negative" || it.exId === "mu_transition" || it.exId === "traction_explosive")) || it.kg > 0 || it.exId === "muscle_up" ? Math.max(120, S.profile.rest) : S.profile.rest);
+const restFor = (it) => {
+  if (it.fin) return Math.min(60, S.profile.rest); // finisher bras : repos court
+  const heavy = (it.mu && (it.exId === "muscle_up" || it.exId === "mu_negative" || it.exId === "mu_transition" || it.exId === "traction_explosive")) || it.kg > 0 || it.exId === "muscle_up";
+  return heavy ? Math.max(120, S.profile.rest) : S.profile.rest;
+};
 const estMinutes = (items) => Math.round(5 + sum(items.map((it) => it.sets.length * (0.7 + restFor(it) / 60))));
 
 const unitSuffix = (it, n) => (it.unit === "s" ? " s" : it.perSide ? " par jambe" : "");
@@ -606,6 +610,43 @@ function shoppingText(wk) {
   return t;
 }
 
+/* ================= MODE BATTANT (défi 12 semaines) ================= */
+/* Chaque jour : les 4 repas (4 pts), la nuit de 9 h (1 pt), la séance si elle est prévue ce jour-là (2 pts).
+   Le circuit bonus des jours de repos rapporte 1 pt en plus (le score est plafonné à 100 %). */
+const battantOn = () => !!(S.battant && S.battant.start);
+const battantDayNo = (d) => (battantOn() ? daysBetween(S.battant.start, d || today()) + 1 : 0);
+const battantActive = (d) => { const n = battantDayNo(d); return n >= 1 && n <= BATTANT_DAYS; };
+const battantDone = () => battantOn() && battantDayNo() > BATTANT_DAYS;
+const battantMark = (d) => (S.battant && S.battant.days[d]) || {};
+const sessionDoneOn = (d) => S.sessions.some((s) => s.d === d);
+function sessionPlannedOn(d) { const W = S.weeks[weekKey(d)]; return !!(W && W.slots.some((x) => x.d === d)); }
+function battantDay(d) {
+  const m = battantMark(d), sDay = sessionPlannedOn(d) || sessionDoneOn(d), done = sessionDoneOn(d);
+  const meals = mainChecks(d), sleep = !!m.sleep, bonus = !sDay && !!m.bonus;
+  const max = 5 + (sDay ? 2 : 0), pts = meals + (sleep ? 1 : 0) + (sDay && done ? 2 : 0) + (bonus ? 1 : 0);
+  return { d, sDay, done, meals, sleep, bonus, pts, max, pct: Math.min(100, Math.round((pts / max) * 100)) };
+}
+function battantToggle(d, k) {
+  if (!S.battant) return;
+  const m = S.battant.days[d] || (S.battant.days[d] = {});
+  m[k] = !m[k]; saveState();
+}
+function battantWeekNo(d) { return Math.ceil(battantDayNo(d) / 7); }
+function battantWeekScore(n) { // semaine n du défi (1 à 12) : moyenne des jours déjà passés ou en cours
+  if (!battantOn()) return null;
+  const start = addDays(S.battant.start, (n - 1) * 7), t = today(), days = [];
+  for (let i = 0; i < 7; i++) { const d = addDays(start, i); if (d <= t) days.push(battantDay(d).pct); }
+  return days.length ? Math.round(sum(days) / days.length) : null;
+}
+function battantGoodWeeks() { // semaines du défi terminées avec un score d'au moins 80 %
+  if (!battantOn()) return 0;
+  let n = 0;
+  for (let w = 1; w <= 12; w++) { const end = addDays(S.battant.start, w * 7 - 1); if (end < today() && battantWeekScore(w) >= 80) n++; }
+  return n;
+}
+function battantStart(d) { S.battant = { start: d || today(), days: {} }; saveState(); }
+function battantStop() { S.battant = null; saveState(); }
+
 /* ================= BADGES ================= */
 function checkBadges() {
   const gain = S.weights.length && startKg() != null ? curKg() - startKg() : 0, g = muGates();
@@ -617,6 +658,7 @@ function checkBadges() {
     kg1: gain >= 1, kg5: gain >= 5,
     goal3: S.weights.length > 0 && curKg() >= S.profile.goal3Kg - 0.5, goal: S.weights.length > 0 && curKg() >= S.profile.goalKg,
     meals7: fullDaysCount() >= 7, photo: S.photos.length >= 1,
+    bat4: battantGoodWeeks() >= 4, bat8: battantGoodWeeks() >= 8, bat12: battantGoodWeeks() >= 12,
   };
   const fresh = [];
   BADGES.forEach((b) => { if (cond[b.id] && !S.badges[b.id]) { S.badges[b.id] = today(); fresh.push(b); } });

@@ -116,7 +116,7 @@ function viewWork() {
   return `${ssTop(`${C.ex + 1}/${n}`, it.exId)}
   <div class="dots">${C.items.map((x, i) => `<i class="${x.sets.every((s) => s.done) ? "on" : i === C.ex ? "cur" : ""}"></i>`).join("")}</div>
   <div class="ss-mid">
-    <div><div class="ss-name">${esc(ex.n)}</div>
+    <div>${it.fin ? `<p><span class="pill">💪 Finisher bras · 60 s de repos</span></p>` : ""}<div class="ss-name">${esc(ex.n)}</div>
       ${it.origId ? `<p class="small" style="color:var(--blue)">remplace ${esc(exName(it.origId))} (matériel du parc)</p>` : ""}
       ${it.kg ? `<p><span class="pill acc">🎒 Sac à dos : +${fmtKg(it.kg)} kg</span></p>` : ""}</div>
     <div><div class="ss-target">${targetsLabel(it)}</div><p class="muted small">${hint}</p></div>

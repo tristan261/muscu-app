@@ -14,13 +14,13 @@ const item = (items, lad) => items.find((i) => i.lad === lad);
 const top = (it) => it.hi, bottom = (it) => it.lo;
 
 /* ---------- DOUBLE PROGRESSION ---------- */
-test("séance 1 : le bloc muscle-up passe en premier, puis tractions, rowing, supination, gainage", () => {
+test("séance 1 : le bloc muscle-up passe en premier, puis tractions, rowing, supination, gainage, finisher bras", () => {
   fresh(); const it = buildSession("S1");
-  assert.deepStrictEqual(it.map((x) => x.exId), ["traction_explosive", "suspension", "traction", "rowing_australien", "traction_supi", "releve_genoux"]);
+  assert.deepStrictEqual(it.map((x) => x.exId), ["traction_explosive", "suspension", "traction", "rowing_australien", "traction_supi", "releve_genoux", "curl_barre", "ext_triceps_haute"]);
 });
 test("séance 2 : dips, pompes, squats, fentes, gainage ; séance 3 : technique, explosifs, L-sit, dips, tractions, mobilité", () => {
   fresh();
-  assert.deepStrictEqual(buildSession("S2").map((x) => x.lad), ["dips", "push", "legs", "lunge", "core"]);
+  assert.deepStrictEqual(buildSession("S2").map((x) => x.lad), ["dips", "push", "legs", "lunge", "core", "triceps", "biceps"]);
   const s3 = buildSession("S3").map((x) => x.exId);
   assert.deepStrictEqual(s3, ["traction_explosive", "suspension", "pompes_explosives", "lsit_groupe", "dips", "traction", "mobilite_epaules"]);
 });
@@ -597,4 +597,81 @@ test("5 · rattacher sans planning ou sans place ne casse rien", () => {
 test("1 · semaine en cours non générée mais semaine prochaine prête : la prochaine séance existe", () => {
   fresh(); TODAY_OVERRIDE = "2026-11-22"; generateWeek("2026-11-23", ["2026-11-24", "2026-11-26", "2026-11-28"]);
   assert.strictEqual(todayState().status, "noplan"); const n = nextSession(); assert.strictEqual(n.d, "2026-11-24"); assert.strictEqual(n.type, "S1");
+});
+
+
+/* ---------- FINISHER BRAS ---------- */
+test("bras · finisher de 2 + 2 séries en fin de séances 1 et 2, pas dans la séance légère ni la version 30 min", () => {
+  fresh();
+  const s1 = buildSession("S1"), s2 = buildSession("S2"), s3 = buildSession("S3");
+  assert.deepStrictEqual(s1.filter((x) => x.fin).map((x) => [x.lad, x.sets.length]), [["biceps", 2], ["triceps", 2]]);
+  assert.deepStrictEqual(s2.filter((x) => x.fin).map((x) => x.lad), ["triceps", "biceps"]);
+  assert(!s3.some((x) => x.fin));
+  assert(!buildSession("S1", undefined, true).some((x) => x.fin) && !buildSession("S2", undefined, true).some((x) => x.fin));
+});
+test("bras · repos court (60 s) sur le finisher, le reste inchangé", () => {
+  fresh(); const s1 = buildSession("S1");
+  assert.strictEqual(restFor(s1.find((x) => x.lad === "biceps")), 60);
+  assert.strictEqual(restFor(s1.find((x) => x.lad === "pullV")), 90);
+  assert.strictEqual(restFor(s1.find((x) => x.exId === "traction_explosive")), 120);
+});
+test("bras · double progression : +1 rep, puis variante plus dure après 2 séances au haut de la fourchette", () => {
+  fresh();
+  doSession("S1", "2026-11-02", (it) => (it.lad === "biceps" ? 11 : it.lo));
+  assert.deepStrictEqual(item(buildSession("S1"), "biceps").sets.map((s) => s.t), [12, 12]);
+  doSession("S1", "2026-11-04", (it) => (it.lad === "biceps" ? 15 : it.lo));
+  doSession("S1", "2026-11-06", (it) => (it.lad === "biceps" ? 15 : it.lo));
+  assert.strictEqual(item(buildSession("S1"), "biceps").exId, "curl_barre_bas");
+});
+test("bras · sans barre basse ni parallèles : curl remplacé, extensions au banc", () => {
+  fresh(); S.parks[0].equip = ["barre", "banc"];
+  const s1 = buildSession("S1");
+  assert.strictEqual(item(s1, "biceps").exId, "traction_supi");
+  assert.strictEqual(item(s1, "triceps").exId, "ext_triceps_haute");
+});
+test("bras · le finisher ajoute moins de 8 minutes à la séance", () => {
+  fresh(); const all = buildSession("S1"), base = all.filter((x) => !x.fin);
+  assert(estMinutes(all) - estMinutes(base) <= 8, estMinutes(all) - estMinutes(base));
+});
+
+/* ---------- MODE BATTANT ---------- */
+test("battant · éteint par défaut, lancé à une date, numéro du jour et de la semaine", () => {
+  fresh(); assert(!battantOn());
+  battantStart("2026-11-16"); TODAY_OVERRIDE = "2026-11-24";
+  assert.strictEqual(battantDayNo(), 9); assert.strictEqual(battantWeekNo(today()), 2); assert(battantActive());
+  TODAY_OVERRIDE = addDays("2026-11-16", 84); assert(battantDone());
+});
+test("battant · jour de repos : 4 repas + nuit = 100 %, le bonus ne dépasse pas 100 %", () => {
+  fresh(); battantStart("2026-11-16"); const d = "2026-11-17"; TODAY_OVERRIDE = d;
+  MEAL_SLOTS.forEach((sl) => toggleMeal(d, sl.id));
+  assert.strictEqual(battantDay(d).pct, 80);
+  battantToggle(d, "sleep"); assert.strictEqual(battantDay(d).pct, 100);
+  battantToggle(d, "bonus"); assert.strictEqual(battantDay(d).pct, 100);
+});
+test("battant · jour de séance prévu : la séance compte 2 points et se coche toute seule", () => {
+  fresh(); battantStart("2026-11-16"); const d = "2026-11-18"; TODAY_OVERRIDE = d;
+  generateWeek("2026-11-16", ["2026-11-16", "2026-11-18", "2026-11-20"]);
+  let b = battantDay(d); assert(b.sDay); assert.strictEqual(b.max, 7);
+  MEAL_SLOTS.forEach((sl) => toggleMeal(d, sl.id)); battantToggle(d, "sleep");
+  assert.strictEqual(battantDay(d).pct, 71);
+  doSession("S2", d, (it) => it.lo);
+  b = battantDay(d); assert(b.done); assert.strictEqual(b.pct, 100);
+  battantToggle(d, "bonus"); assert(!battantDay(d).bonus); // pas de bonus un jour de séance
+});
+test("battant · score de la semaine = moyenne des jours déjà passés", () => {
+  fresh(); battantStart("2026-11-16"); TODAY_OVERRIDE = "2026-11-17";
+  ["2026-11-16", "2026-11-17"].forEach((d) => { MEAL_SLOTS.forEach((sl) => toggleMeal(d, sl.id)); battantToggle(d, "sleep"); });
+  assert.strictEqual(battantWeekScore(1), 100);
+  TODAY_OVERRIDE = "2026-11-18"; assert.strictEqual(battantWeekScore(1), 67);
+});
+test("battant · badges à 4 semaines terminées à 80 % ou plus, arrêter efface le défi", () => {
+  fresh(); battantStart("2026-11-16");
+  for (let i = 0; i < 28; i++) { const d = addDays("2026-11-16", i); MEAL_SLOTS.forEach((sl) => toggleMeal(d, sl.id)); battantToggle(d, "sleep"); }
+  TODAY_OVERRIDE = addDays("2026-11-16", 27); assert.strictEqual(battantGoodWeeks(), 3); // la 4e semaine n'est pas finie
+  TODAY_OVERRIDE = addDays("2026-11-16", 28); assert.strictEqual(battantGoodWeeks(), 4);
+  checkBadges(); assert(S.badges.bat4); assert(!S.badges.bat8);
+  battantStop(); assert(!battantOn()); assert.strictEqual(battantGoodWeeks(), 0);
+});
+test("battant · un ancien état sans le défi se charge sans erreur", () => {
+  const st = mergeState({ v: 2, profile: { name: "T" } }); assert.strictEqual(st.battant, null);
 });

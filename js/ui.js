@@ -157,8 +157,56 @@ function viewToday() {
   ${UI.ready ? `<div class="card hl"><div class="row between"><b>✅ ${UI.ready}</b><button class="icon-btn" data-a="ready-close" aria-label="Fermer">✕</button></div></div>` : ""}
   ${weekStrip()}
   <div class="row"><span class="pill ${st ? "acc" : ""}">${st ? "🔥" : "✨"} ${st} semaine${st > 1 ? "s" : ""} d'affilée avec 3 séances</span></div>
-  ${sessionCard()}${mealsCard()}`;
+  ${sessionCard()}${mealsCard()}${battantCard()}`;
 }
+
+/* ---------- Mode battant : défi 12 semaines ---------- */
+function battantCard() {
+  if (!battantOn()) {
+    return `<div class="card soft"><div class="row between"><span class="eyebrow">🥊 Mode battant</span></div>
+      <b>Défi 12 semaines</b><p class="muted small">Chaque jour : tes 4 repas, ta nuit de 9 h et ta séance quand elle est prévue. Un score de régularité te montre si tu tiens le rythme.</p>
+      <button class="btn" data-a="bat-info">Voir le défi</button></div>`;
+  }
+  if (battantDone()) {
+    const scores = Array.from({ length: 12 }, (_, i) => battantWeekScore(i + 1) || 0), avg = Math.round(sum(scores) / 12);
+    return `<div class="card hl"><span class="eyebrow">🥊 Mode battant · terminé</span><h2>12 semaines bouclées : ${avg} % de régularité</h2>
+      <p class="muted small">${battantGoodWeeks()} semaine${battantGoodWeeks() > 1 ? "s" : ""} à 80 % ou plus. Compare ta photo du mois avec celle du départ.</p>
+      <button class="btn primary" data-a="bat-go">Relancer un défi de 12 semaines</button><button class="btn ghost" data-a="bat-stop">Masquer</button></div>`;
+  }
+  const d = today(), b = battantDay(d), n = battantDayNo(d), wn = battantWeekNo(d), ws = battantWeekScore(wn);
+  const row = (on, label, sub, act) => act
+    ? `<div class="line" data-a="${act}" role="button" tabindex="0">${tick(on)}<div class="grow"><div class="t ${on ? "done-txt" : ""}">${label}</div><div class="small muted">${sub}</div></div></div>`
+    : `<div class="line">${tick(on)}<div class="grow"><div class="t ${on ? "done-txt" : ""}">${label}</div><div class="small muted">${sub}</div></div></div>`;
+  const rows = [
+    row(b.meals === 4, `Mes 4 repas (${b.meals}/4)`, "se coche tout seul avec « Mes repas »"),
+    row(b.sleep, "Nuit de 9 h", "couché avant 23 h, téléphone loin du lit : touche pour cocher", "bat-sleep"),
+    b.sDay ? row(b.done, "Ma séance du jour", b.done ? "faite 💪" : "se coche toute seule à la fin de la séance")
+      : row(b.bonus, "Bonus repos : circuit 15 min (facultatif)", "léger, ne gêne pas ta récupération : touche pour cocher", "bat-bonus"),
+  ].join("");
+  return `<div class="card hl"><div class="row between"><span class="eyebrow">🥊 Mode battant · jour ${n}/${BATTANT_DAYS}</span><span class="pill ${b.pct >= 80 ? "acc" : ""}">${b.pct} %</span></div>
+    <div class="row between"><b>Semaine ${wn}/12</b><span class="small muted">régularité ${ws != null ? ws : 0} %</span></div>
+    <div class="bar"><i style="width:${Math.round((n / BATTANT_DAYS) * 100)}%"></i></div>
+    <div>${rows}</div>
+    ${!b.sDay ? `<button class="btn ghost" data-a="bat-circuit">Voir le circuit bonus</button>` : ""}
+    <p class="muted small center">Objectif : 80 % chaque semaine. Une journée ratée ne casse rien : la suivante compte autant.</p></div>`;
+}
+ACTIONS["bat-info"] = () => openSheet(`<div class="row between"><h2>🥊 Mode battant</h2><button class="icon-btn" data-a="close-sheet" aria-label="Fermer">✕</button></div>
+  <p>12 semaines pour être régulier sur ce qui fait vraiment changer ton physique. Chaque jour, tu marques des points :</p>
+  <div class="card soft" style="gap:6px"><div>🍽️ <b>Tes 4 repas</b> : 1 point chacun (même le midi, même petit)</div>
+    <div>😴 <b>Une nuit de 9 h</b> : 1 point (c'est la nuit que le muscle se construit)</div>
+    <div>💪 <b>Ta séance</b>, les jours où elle est prévue : 2 points</div>
+    <div>⚡ <b>Bonus</b> les jours de repos : circuit léger de 15 min, 1 point en plus (facultatif)</div></div>
+  <p class="muted small">Objectif : 80 % de régularité chaque semaine. Badges à 4, 8 et 12 semaines. Pas de séance en plus les jours de repos : t'entraîner plus dur ne te ferait pas progresser plus vite, ça t'exposerait surtout aux blessures.</p>
+  <button class="btn primary big" data-a="bat-go">Lancer le défi aujourd'hui</button><button class="btn ghost" data-a="close-sheet">Plus tard</button>`);
+ACTIONS["bat-go"] = () => { battantStart(today()); closeSheet(); toast("🥊 Défi lancé : 12 semaines, c'est parti !"); render(); };
+ACTIONS["bat-sleep"] = () => { battantToggle(today(), "sleep"); announceBadges(); render(); };
+ACTIONS["bat-bonus"] = () => { battantToggle(today(), "bonus"); announceBadges(); render(); };
+ACTIONS["bat-circuit"] = () => openSheet(`<div class="row between"><h2>⚡ Circuit bonus · 15 min</h2><button class="icon-btn" data-a="close-sheet" aria-label="Fermer">✕</button></div>
+  <p class="muted small">3 tours, sans forcer, 1 min de pause entre les tours. Ça doit rester facile : c'est un jour de repos.</p>
+  <div>${BONUS_CIRCUIT.map((x) => `<div class="line"><div class="grow"><div class="t">${x.t}</div><div class="small muted">${x.d}</div></div></div>`).join("")}</div>
+  <button class="btn primary" data-a="bat-bonus-done">C'est fait ✓</button><button class="btn ghost" data-a="close-sheet">Fermer</button>`);
+ACTIONS["bat-bonus-done"] = () => { if (!battantMark(today()).bonus) battantToggle(today(), "bonus"); closeSheet(); toast("⚡ Bonus validé"); render(); };
+ACTIONS["bat-stop"] = () => { if (!confirm("Arrêter le mode battant ? Ton historique du défi sera effacé.")) return; battantStop(); render(); };
 ACTIONS["meal-check"] = (el) => {
   if (UI.suppress > Date.now()) return;
   const d = today(), was = isFullDay(d);
@@ -618,6 +666,9 @@ function viewReglages() {
   <div class="card"><span class="eyebrow">Mon niveau de départ</span>
     <p class="muted small">Utilisé seulement avant ta première séance sur chaque exercice. Ensuite, l'app se cale sur tes vraies reps.</p>
     <div class="grid3">${f("tractions", "Tractions", "num", "", "lvl")}${f("dips", "Dips", "num", "", "lvl")}${f("pompes", "Pompes", "num", "", "lvl")}</div></div>
+  <div class="card"><span class="eyebrow">🥊 Mode battant</span>
+    ${battantOn() ? `<p class="muted small">Défi lancé le ${frDate(S.battant.start)} · jour ${Math.min(battantDayNo(), BATTANT_DAYS)}/${BATTANT_DAYS}.</p><button class="btn ghost" data-a="bat-stop">Arrêter le défi</button>`
+      : `<p class="muted small">Défi de 12 semaines : repas, sommeil et séances, avec un score de régularité.</p><button class="btn" data-a="bat-info">Voir le défi</button>`}</div>
   <div class="card"><span class="eyebrow">Sauvegarde</span>
     <p class="muted small">Tes données restent sur ce téléphone. Fais une sauvegarde de temps en temps et garde le fichier dans Google Drive ou envoie-le-toi par mail.</p>
     <button class="btn primary" data-a="export">⬇️ Exporter une sauvegarde</button>

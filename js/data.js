@@ -148,7 +148,30 @@ const EXERCISES = {
   mobilite_epaules: { n: "Mobilité des épaules", needs: null, subs: [], unit: "s",
     how: "30 secondes : grands cercles de bras lents, puis suspension passive à la barre si tu en as une (épaules relâchées, respire). Rien ne doit faire mal.",
     errs: "Forcer sur une position douloureuse." },
+  // ---------- FINISHER BRAS ----------
+  curl_barre: { n: "Curl biceps à la barre basse", needs: [["basse"], ["paralleles"], ["espalier"]], subs: ["traction_supi"],
+    how: "Sous une barre à hauteur de poitrine, mains en supination (paumes vers toi), largeur d'épaules, corps gainé incliné, talons au sol. Plie seulement les coudes pour amener le front vers la barre, coudes devant toi et immobiles, puis redescends bras tendus en 2 secondes.",
+    errs: "Tirer avec le dos comme un rowing. Écarter les coudes. Casser le gainage." },
+  curl_barre_bas: { n: "Curl biceps à la barre basse (corps plus horizontal)", needs: [["basse"], ["paralleles"], ["espalier"]], subs: ["curl_barre", "traction_supi"],
+    how: "Même mouvement que le curl à la barre basse, mais pieds plus en avant (ou barre plus basse) : le corps est plus horizontal, donc plus de poids sur les biceps.",
+    errs: "Tirer avec le dos. Raccourcir le mouvement en bas." },
+  ext_triceps_haute: { n: "Extensions triceps (appui haut)", needs: [["paralleles"], ["basse"], ["banc"], ["espalier"]], subs: ["pompes_diamant"],
+    how: "Mains sur un appui à hauteur de taille (barre parallèle, barre basse, dossier du banc), corps gainé en planche inclinée. Plie seulement les coudes pour amener le front vers les mains, coudes pointés vers l'avant, puis tends les bras.",
+    errs: "Écarter les coudes. Laisser tomber le bassin. Descendre trop vite." },
+  ext_triceps: { n: "Extensions triceps (appui bas)", needs: [["banc"], ["basse"], ["paralleles"]], subs: ["ext_triceps_haute", "pompes_diamant"],
+    how: "Même mouvement avec un appui plus bas (assise du banc, barre basse au plus bas) : le corps est plus horizontal, les triceps portent plus de poids.",
+    errs: "Écarter les coudes. Transformer le mouvement en pompe." },
 };
+
+/* Mode battant : circuit bonus de 15 min pour les jours de repos (léger, ne gêne pas la récupération) */
+const BONUS_CIRCUIT = [
+  { t: "Planche", d: "30 secondes, corps bien gainé" },
+  { t: "Pompes lentes", d: "8 reps faciles, 3 secondes en descente" },
+  { t: "Squats", d: "15 reps" },
+  { t: "Hollow body", d: "20 secondes, bas du dos collé au sol" },
+  { t: "Mobilité des épaules", d: "30 secondes de grands cercles de bras" },
+];
+const BATTANT_DAYS = 84; // 12 semaines
 
 /* Échelles de progression, de la variante la plus facile à la plus dure.
    lo-hi : fourchette de reps (ou de secondes). start : barreau de départ. rec : record associé. */
@@ -174,15 +197,19 @@ const LADDERS = {
     { ex: "releve_jambes", lo: 6, hi: 10 }, { ex: "lsit", lo: 10, hi: 20, unit: "s" }] },
   lsit: { n: "L-sit", start: 0, rungs: [
     { ex: "lsit_groupe", lo: 10, hi: 20, unit: "s" }, { ex: "lsit_une_jambe", lo: 8, hi: 15, unit: "s" }, { ex: "lsit", lo: 8, hi: 15, unit: "s" }] },
+  biceps: { n: "Biceps (finisher)", start: 0, rungs: [{ ex: "curl_barre", lo: 10, hi: 15 }, { ex: "curl_barre_bas", lo: 8, hi: 12 }] },
+  triceps: { n: "Triceps (finisher)", start: 0, rungs: [{ ex: "ext_triceps_haute", lo: 10, hi: 15 }, { ex: "ext_triceps", lo: 8, hi: 12 }] },
 };
 
 /* Les 3 séances. mu : bloc muscle-up (dépend de la porte). main : gardé dans la version 30 min.
    volume : séries modérées, sans progression. fixed : exercice fixe, sans échelle. */
 const SESSIONS = {
   S1: { n: "Tirage + muscle-up", short: "Tirage", heavy: true, slots: [
-    { mu: true, main: true }, { ladder: "pullV", sets: 3, main: true }, { ladder: "pullH", sets: 3, main: true }, { ladder: "supi", sets: 3 }, { ladder: "core", sets: 3 }] },
+    { mu: true, main: true }, { ladder: "pullV", sets: 3, main: true }, { ladder: "pullH", sets: 3, main: true }, { ladder: "supi", sets: 3 }, { ladder: "core", sets: 3 },
+    { ladder: "biceps", sets: 2, fin: true }, { ladder: "triceps", sets: 2, fin: true }] },
   S2: { n: "Poussée + jambes", short: "Poussée", heavy: true, slots: [
-    { ladder: "dips", sets: 4, main: true }, { ladder: "push", sets: 4, main: true }, { ladder: "legs", sets: 4, main: true }, { ladder: "lunge", sets: 3 }, { ladder: "core", sets: 3 }] },
+    { ladder: "dips", sets: 4, main: true }, { ladder: "push", sets: 4, main: true }, { ladder: "legs", sets: 4, main: true }, { ladder: "lunge", sets: 3 }, { ladder: "core", sets: 3 },
+    { ladder: "triceps", sets: 2, fin: true }, { ladder: "biceps", sets: 2, fin: true }] },
   S3: { n: "Technique + volume", short: "Technique", heavy: false, slots: [
     { mu: true, main: true, max: 2 }, { fixed: "pompes_explosives", key: "explo", sets: 3, lo: 5, hi: 5 }, { ladder: "lsit", sets: 3, main: true },
     { ladder: "dips", sets: 2, volume: true, main: true }, { ladder: "pullV", sets: 2, volume: true }, { fixed: "mobilite_epaules", key: "mob", sets: 2, lo: 30, hi: 30, unit: "s" }] },
@@ -374,4 +401,7 @@ const BADGES = [
   { id: "goal", ic: "🏆", n: "Objectif final", d: "Ton poids objectif est atteint" },
   { id: "meals7", ic: "🍽️", n: "7 jours bien nourri", d: "7 journées avec les 4 repas cochés" },
   { id: "photo", ic: "📸", n: "Première photo", d: "Première photo du mois enregistrée" },
+  { id: "bat4", ic: "🥊", n: "Battant · 4 semaines", d: "4 semaines du défi à 80 % ou plus" },
+  { id: "bat8", ic: "🛡️", n: "Battant · 8 semaines", d: "8 semaines du défi à 80 % ou plus" },
+  { id: "bat12", ic: "🏆", n: "Battant · défi terminé", d: "Les 12 semaines du défi bouclées à 80 % ou plus" },
 ];

@@ -26,6 +26,7 @@ function defaultState() {
       weekend: ["09:30", "12:30", "16:30", "19:30", "22:00"],
     },
     badges: {}, photos: [], kcalBumps: [],
+    battant: null,       // mode battant : { start, days: { date: { sleep, bonus } } }
     current: null,
   };
 }

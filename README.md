@@ -21,6 +21,8 @@ Application web installable (PWA), faite pour une seule personne.
 - **Jours** : jamais 2 séances lourdes consécutives (la 2e devient la séance technique légère).
 - **Muscle-up** : 3 portes (10 tractions + 10 dips → 5 tractions explosives poitrine à la barre → 3 négatives de 5 s), puis les essais.
 - **Poids** : consigne calculée sur des moyennes de pesées ; moins de 0,5 kg/mois sur 3 semaines → +250 kcal/jour ; les calories ne baissent jamais.
+- **Finisher bras** : 2 séries de curls biceps et 2 séries d'extensions triceps à la barre basse en fin de séances 1 et 2 (pas dans la version 30 min), même double progression, 60 s de repos.
+- **Mode battant** (facultatif) : défi de 12 semaines, score quotidien (4 repas, nuit de 9 h, séance prévue ; circuit bonus léger les jours de repos), objectif 80 % par semaine, badges à 4, 8 et 12 semaines.
 - **Repas** : 53 repas, jamais plus de 2 fois le même dans la semaine, plan différent de la semaine précédente, midi de semaine transportable sans frigo.
 
 ## Tests automatiques
@@ -41,6 +43,6 @@ Parcours dans un navigateur à taille de téléphone : `python3 -m http.server 8
 | `js/ui.js`, `js/session.js` | Les écrans et le mode séance |
 | `sw.js`, `manifest.webmanifest` | Installation et fonctionnement hors connexion |
 
-Après une modification du code, changer le numéro dans `sw.js` (`forge-v4` → `forge-v5`).
+Après une modification du code, changer le numéro dans `sw.js` (`forge-v5` → `forge-v6`).
 
 FORGE ne remplace pas l'avis d'un médecin.
