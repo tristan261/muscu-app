@@ -251,18 +251,57 @@ function generateWeek(wk, dates) {
   saveState();
   return S.weeks[wk];
 }
-function moveSlot(wk, idx, newDate) {
-  const W = S.weeks[wk]; if (!W) return false;
+/* Déplace une séance dans la semaine W (sans enregistrer) : réaffecte les types des séances non faites. */
+function applyMove(W, idx, newDate) {
   const sl = W.slots[idx];
-  if (!sl || sl.done || weekKey(newDate) !== wk || W.slots.some((s, i) => i !== idx && s.d === newDate)) return false;
+  if (!sl || sl.done || weekKey(newDate) !== weekKey(sl.d) || W.slots.some((s, i) => i !== idx && s.d === newDate)) return false;
   sl.d = newDate;
-  const order = W.slots.map((s, i) => i).sort((a, b) => (W.slots[a].d < W.slots[b].d ? -1 : 1));
-  const sorted = order.map((i) => W.slots[i]);
+  const sorted = [...W.slots].sort((a, b) => (a.d < b.d ? -1 : 1));
   const types = assignTypes(sorted.map((s) => s.d), sorted.map((s) => (s.done ? s.type : null)));
   sorted.forEach((s, i) => { if (!s.done) s.type = types[i]; });
   W.slots = sorted; W.msg = consecutiveNote(W.slots);
-  saveState();
   return true;
+}
+function moveSlot(wk, idx, newDate) {
+  const W = S.weeks[wk]; if (!W || !applyMove(W, idx, newDate)) return false;
+  saveState(); return true;
+}
+/* « Faire une séance aujourd'hui quand même » (jour non prévu).
+   On avance la séance en retard, sinon la plus proche ; les types des séances restantes sont réaffectés
+   pour garder la règle des jours (pas 2 séances lourdes de suite), ce qui choisit la séance la plus logique. */
+function extraSession(dry) {
+  const wk = weekKey(today()), W = S.weeks[wk];
+  if (!W) return { ok: false, reason: "noplan" };
+  if (W.slots.some((s) => s.d === today())) return { ok: false, reason: "planned" };
+  const undone = W.slots.map((s, i) => ({ s, i })).filter((x) => !x.s.done).sort((a, b) => (a.s.d < b.s.d ? -1 : 1));
+  if (!undone.length) return { ok: false, reason: "full" };
+  const pick = undone.find((x) => x.s.d < today()) || undone[0];
+  const W2 = JSON.parse(JSON.stringify(W));
+  if (!applyMove(W2, pick.i, today())) return { ok: false, reason: "impossible" };
+  const idx = W2.slots.findIndex((s) => s.d === today()), note = consecutiveNote(W2.slots);
+  W2.msg = "Tu as ajouté une séance aujourd'hui : le reste de ta semaine est réajusté." + (note ? " " + note : "");
+  const res = { ok: true, wk, idx, type: W2.slots[idx].type, slots: W2.slots.map((s) => ({ d: s.d, type: s.type, done: !!s.done })) };
+  if (!dry) { S.weeks[wk] = W2; saveState(); }
+  return res;
+}
+/* Les 7 jours d'une semaine avec leur séance éventuelle (bande « Ma semaine ») */
+function weekDays(wk) {
+  const W = S.weeks[wk];
+  return Array.from({ length: 7 }, (_, di) => {
+    const d = addDays(wk, di), idx = W ? W.slots.findIndex((s) => s.d === d) : -1;
+    return { d, di, idx, slot: idx >= 0 ? W.slots[idx] : null };
+  });
+}
+function nextSession() { // prochaine séance non faite après aujourd'hui (cette semaine ou la suivante)
+  const cur = weekKey(today()), c = [];
+  [cur, addDays(cur, 7)].forEach((wk) => { const W = S.weeks[wk]; if (W) W.slots.forEach((s, i) => { if (!s.done && s.d > today()) c.push({ wk, i, d: s.d, type: s.type }); }); });
+  c.sort((a, b) => (a.d < b.d ? -1 : 1));
+  return c[0] || null;
+}
+function overdueSession() { // séance de cette semaine prévue avant aujourd'hui et pas faite
+  const wk = weekKey(today()), W = S.weeks[wk]; if (!W) return null;
+  const i = W.slots.findIndex((s) => !s.done && s.d < today());
+  return i >= 0 ? { wk, i, d: W.slots[i].d, type: W.slots[i].type } : null;
 }
 function todayState() {
   const wk = weekKey(today()), W = S.weeks[wk];

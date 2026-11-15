@@ -39,6 +39,6 @@ node tests/logic.test.js
 | `js/ui.js`, `js/session.js` | Les écrans et le mode séance |
 | `sw.js`, `manifest.webmanifest` | Installation et fonctionnement hors connexion |
 
-Après une modification du code, changer le numéro dans `sw.js` (`forge-v2` → `forge-v3`).
+Après une modification du code, changer le numéro dans `sw.js` (`forge-v3` → `forge-v4`).
 
 FORGE ne remplace pas l'avis d'un médecin.

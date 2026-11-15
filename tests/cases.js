@@ -368,3 +368,61 @@ test("pas de donnée personnelle écrite en dur dans le code", () => {
   assert(!/Tristan|Quasym|2011|dasilva/i.test(SRC.replace(/\/\*[\s\S]*?\*\//g, "")), "donnée perso trouvée");
 });
 
+
+/* ---------- BANDE « MA SEMAINE », PROCHAINE SÉANCE, SÉANCE « QUAND MÊME » ---------- */
+test("bande Ma semaine : 7 jours, séances sur les bons jours, séance faite marquée", () => {
+  fresh(); generateWeek("2026-11-16", ["2026-11-18", "2026-11-21", "2026-11-23"].slice(0, 2).concat("2026-11-22"));
+  S.weeks["2026-11-16"].slots[0].done = "x";
+  const d = weekDays("2026-11-16"); assert.strictEqual(d.length, 7);
+  assert.deepStrictEqual(d.filter((x) => x.slot).map((x) => x.d), ["2026-11-18", "2026-11-21", "2026-11-22"]);
+  assert.strictEqual(d[2].slot.done, "x"); assert.strictEqual(d[0].slot, null);
+});
+test("jour sans séance : prochaine séance (cette semaine, puis la semaine suivante)", () => {
+  fresh(); generateWeek("2026-11-16", ["2026-11-18", "2026-11-21", "2026-11-22"]);
+  TODAY_OVERRIDE = "2026-11-19"; let n = nextSession(); assert.strictEqual(n.d, "2026-11-21"); assert.strictEqual(n.type, S.weeks["2026-11-16"].slots[1].type);
+  S.weeks["2026-11-16"].slots.forEach((s) => { s.done = "x"; });
+  assert.strictEqual(nextSession(), null);
+  generateWeek("2026-11-23", ["2026-11-24", "2026-11-26", "2026-11-28"]);
+  assert.strictEqual(nextSession().d, "2026-11-24");
+});
+test("séance en retard détectée", () => {
+  fresh(); generateWeek("2026-11-16", ["2026-11-18", "2026-11-21", "2026-11-22"]); TODAY_OVERRIDE = "2026-11-20";
+  assert.strictEqual(overdueSession().d, "2026-11-18");
+});
+test("séance quand même : refusée sans semaine, un jour prévu, ou semaine complète", () => {
+  fresh(); assert.strictEqual(extraSession(true).reason, "noplan");
+  generateWeek("2026-11-16", ["2026-11-18", "2026-11-21", "2026-11-22"]);
+  TODAY_OVERRIDE = "2026-11-18"; assert.strictEqual(extraSession(true).reason, "planned");
+  S.weeks["2026-11-16"].slots.forEach((s) => { s.done = "x"; }); TODAY_OVERRIDE = "2026-11-19"; assert.strictEqual(extraSession(true).reason, "full");
+});
+test("séance quand même : la séance la plus proche est avancée à aujourd'hui, 3 séances toujours présentes", () => {
+  fresh(); generateWeek("2026-11-16", ["2026-11-19", "2026-11-21", "2026-11-22"]); TODAY_OVERRIDE = "2026-11-17";
+  const dry = extraSession(true); assert(dry.ok); assert.deepStrictEqual(S.weeks["2026-11-16"].slots.map((s) => s.d), ["2026-11-19", "2026-11-21", "2026-11-22"], "aperçu sans effet");
+  const r = extraSession(false); assert(r.ok);
+  const W = S.weeks["2026-11-16"]; assert.deepStrictEqual(W.slots.map((s) => s.d), ["2026-11-17", "2026-11-21", "2026-11-22"]);
+  assert.deepStrictEqual(W.slots.map((s) => s.type).sort(), ["S1", "S2", "S3"]); assert(/réajusté/.test(W.msg));
+  assert.strictEqual(W.slots[r.idx].d, "2026-11-17");
+});
+test("séance quand même : la plus logique = légère le lendemain d'une séance lourde", () => {
+  fresh(); generateWeek("2026-11-16", ["2026-11-18", "2026-11-21", "2026-11-22"]);
+  S.weeks["2026-11-16"].slots[0].done = "x"; S.sessions.push({ id: "w", d: "2026-11-18", type: "S1", items: [] });
+  TODAY_OVERRIDE = "2026-11-19"; const r = extraSession(false);
+  assert.strictEqual(r.type, "S3", "jeudi, lendemain d'une séance de tirage : séance technique légère");
+  const W = S.weeks["2026-11-16"]; assert.strictEqual(W.slots[0].type, "S1"); assert.strictEqual(W.slots[0].done, "x");
+  for (let i = 1; i < 3; i++) if (daysBetween(W.slots[i - 1].d, W.slots[i].d) === 1) assert(!(isHeavy(W.slots[i - 1].type) && isHeavy(W.slots[i].type)));
+});
+test("séance quand même : la séance en retard passe avant les séances à venir", () => {
+  fresh(); generateWeek("2026-11-16", ["2026-11-17", "2026-11-20", "2026-11-22"]); TODAY_OVERRIDE = "2026-11-19";
+  const r = extraSession(false); assert(r.ok);
+  assert.deepStrictEqual(S.weeks["2026-11-16"].slots.map((s) => s.d), ["2026-11-19", "2026-11-20", "2026-11-22"]);
+});
+test("séance quand même : les jours déjà faits ne bougent pas, jamais 2 lourdes de suite sur toutes les combinaisons", () => {
+  const wk = "2026-11-16", all = Array.from({ length: 7 }, (_, i) => addDays(wk, i));
+  for (let a = 0; a < 7; a++) for (let b = a + 1; b < 7; b++) for (let c = b + 1; c < 7; c++) for (let t = 0; t < 7; t++) {
+    if (t === a || t === b || t === c) continue;
+    fresh(); generateWeek(wk, [all[a], all[b], all[c]]); TODAY_OVERRIDE = all[t];
+    const r = extraSession(false); if (!r.ok) continue;
+    const W = S.weeks[wk]; assert.strictEqual(W.slots.length, 3); assert.deepStrictEqual(W.slots.map((s) => s.type).sort(), ["S1", "S2", "S3"]);
+    for (let i = 1; i < 3; i++) if (daysBetween(W.slots[i - 1].d, W.slots[i].d) === 1) assert(!(isHeavy(W.slots[i - 1].type) && isHeavy(W.slots[i].type)), [all[a], all[b], all[c], all[t]].join());
+  }
+});

@@ -2,7 +2,7 @@
 "use strict";
 
 const $ = (sel, root = document) => root.querySelector(sel);
-const UI = { selSlot: null, genWk: null, genDays: [], genEasy: false, mangerTab: "now", mealDate: null, mealSlot: null, weekOff: 0, weekDi: null, recType: "tractions", cmpA: null, cmpB: null, parkDraft: null, suppress: 0, nowOverride: null };
+const UI = { openSlot: null, fromStrip: false, selSlot: null, genWk: null, genDays: [], genEasy: false, mangerTab: "now", mealDate: null, mealSlot: null, weekOff: 0, weekDi: null, recType: "tractions", cmpA: null, cmpB: null, parkDraft: null, suppress: 0, nowOverride: null };
 const ACTIONS = {};
 const SUB = { generer: "today", reglages: "today", fiches: "today", parcs: "today", badges: "today", rappels: "today", photos: "bilan" };
 
@@ -104,10 +104,30 @@ function sessionCard() {
     return `<div class="card"><span class="eyebrow">Séance du jour</span><h2>✅ Séance faite</h2>
       <p class="muted">${n} sur 3 cette semaine. Maintenant mange bien et dors : c'est là que le muscle se construit.</p></div>`;
   }
-  const next = t.W.slots.find((s) => !s.done && s.d > today());
   return `<div class="card"><span class="eyebrow">Aujourd'hui</span><h2>😴 Repos aujourd'hui : mange bien</h2>
-    <p class="muted">${next ? `Prochaine séance : ${dayName(next.d)}.` : "Les muscles grandissent quand tu récupères."}</p></div>`;
+    <p class="muted">Les muscles grandissent quand tu récupères.</p>${extraButton()}</div>`;
 }
+/* Bouton « Faire une séance aujourd'hui quand même » : seulement un jour non prévu, si une séance reste à faire */
+function extraButton() {
+  const r = extraSession(true);
+  return r.ok ? `<button class="btn" data-a="extra-ask">💪 Faire une séance aujourd'hui quand même</button>` : "";
+}
+const STRIP_NAME = { S1: "Tirage", S2: "Poussée", S3: "Tech." };
+function weekStrip() {
+  const wk = weekKey(today()), L = ["L", "M", "M", "J", "V", "S", "D"], days = weekDays(wk);
+  const cells = days.map((x) => {
+    const cls = ["wd", x.slot ? "ses" : "", x.slot && x.slot.done ? "done" : "", x.d === today() ? "today" : ""].join(" ");
+    const inner = `<span class="wl">${L[x.di]}</span><span class="wn">${parseYmd(x.d).getDate()}</span><span class="ws">${x.slot ? (x.slot.done ? "✓" : STRIP_NAME[x.slot.type]) : ""}</span>`;
+    return x.slot ? `<button class="${cls}" data-a="strip-day" data-wk="${wk}" data-i="${x.idx}" aria-label="${cap(dayName(x.d))} : ${SESSIONS[x.slot.type].n}${x.slot.done ? " (faite)" : ""}">${inner}</button>` : `<div class="${cls}">${inner}</div>`;
+  }).join("");
+  let line = "";
+  if (!days.some((x) => x.d === today() && x.slot)) {
+    const n = nextSession(), od = overdueSession();
+    line = n ? `Prochaine séance : ${dayName(n.d)} – ${SESSIONS[n.type].n}` : od ? `Séance à rattraper : ${SESSIONS[od.type].n}` : "";
+  }
+  return `<div class="card" style="gap:8px"><span class="eyebrow">Ma semaine</span><div class="strip">${cells}</div>${line ? `<p class="small acc" style="font-weight:650">${line}</p>` : ""}</div>`;
+}
+ACTIONS["strip-day"] = (el) => { UI.openSlot = { wk: el.dataset.wk, i: +el.dataset.i }; UI.fromStrip = true; go("seance"); };
 function mealsCard() {
   const d = today(), c = checksOf(d), ed = (S.eaten && S.eaten[d]) || {}, times = mealTimes(d), nx = currentSlotIdx(nowHM());
   const rows = dayMeals(d).map((x, i) => {
@@ -124,6 +144,7 @@ function viewToday() {
   return `
   <div class="row between"><div><p class="muted small">${cap(frDateLong(today()))}</p><h1>Salut${nm}</h1></div>
     <a class="icon-btn gear" href="#/reglages" aria-label="Réglages">⚙️</a></div>
+  ${weekStrip()}
   <div class="row"><span class="pill ${st ? "acc" : ""}">${st ? "🔥" : "✨"} ${st} semaine${st > 1 ? "s" : ""} d'affilée avec 3 séances</span></div>
   ${sessionCard()}${mealsCard()}`;
 }
@@ -200,40 +221,77 @@ const muTip = (st) => [
   "Essais de muscle-up en début de séance, frais. On arrête dès que la technique se dégrade.",
   "Muscle-up validé 👑 Les essais restent en début de séance pour l'entretenir.",
 ][st];
+const exLine = (it) => `<div class="exrow"><span>${esc(exName(it.exId))}${it.kg ? ` <span class="pill">🎒 +${fmtKg(it.kg)} kg</span>` : ""}</span><span class="muted small">${targetsLabel(it)}</span></div>`;
+function slotCard(wk, i, sl) {
+  const items = buildSession(sl.type), ss = slotStatus(sl);
+  return `<div class="card slotcard ${sl.d === today() && !sl.done ? "hl" : ""}" data-a="open-slot" data-wk="${wk}" data-i="${i}" role="button" tabindex="0">
+    <div class="row between"><div><span class="eyebrow">${cap(frDateLong(sl.d))}</span><h3>${SESSIONS[sl.type].n}</h3></div><span class="pill ${ss.c}">${ss.t}</span></div>
+    <div>${items.map(exLine).join("")}</div>
+    <div class="row between"><span class="muted small">Environ ${estMinutes(items)} min</span><span class="link">Ouvrir ›</span></div></div>`;
+}
 function viewSeance() {
-  const wk = weekKey(today()), W = weekPlan(wk);
+  const cur = weekKey(today()), nxt = addDays(cur, 7), Wc = weekPlan(cur), Wn = weekPlan(nxt);
+  const open = UI.openSlot && S.weeks[UI.openSlot.wk] && S.weeks[UI.openSlot.wk].slots[UI.openSlot.i] ? UI.openSlot : null;
+  if (open) return viewSlotDetail(open.wk, open.i);
   const resume = S.current ? `<div class="card hl"><h3>Séance en cours : ${SESSIONS[S.current.type].n}</h3><button class="btn primary" data-a="resume">Reprendre</button></div>` : "";
-  if (!W) return `<h1>Séance</h1>${resume}<div class="card hl"><h2>Pas encore de semaine prévue</h2><p class="muted">Choisis tes 3 jours : je prépare tout.</p><a class="btn primary big" href="#/generer">Générer ma semaine</a></div>`;
-  let sel = UI.selSlot;
-  if (sel == null || !W.slots[sel]) { const t = W.slots.findIndex((s) => s.d === today() && !s.done); sel = t >= 0 ? t : Math.max(0, W.slots.findIndex((s) => !s.done)); UI.selSlot = sel; }
-  const sl = W.slots[sel], items = buildSession(sl.type), st = muStage();
-  return `<h1>Séance</h1>${resume}
-  <div class="grid3">${W.slots.map((s, i) => { const ss = slotStatus(s); return `<button class="btn ${i === sel ? "primary" : ""}" style="flex-direction:column;gap:2px;padding:8px 4px;min-height:64px" data-a="sel-slot" data-i="${i}"><span class="small">${cap(dayName(s.d).slice(0, 3))} ${parseYmd(s.d).getDate()}</span><span style="font-size:12px;font-weight:600">${ss.t}</span></button>`; }).join("")}</div>
-  ${W.msg ? `<p class="small" style="color:var(--blue)">ℹ️ ${W.msg}</p>` : ""}
-  <div class="card"><div><span class="eyebrow">${cap(frDateLong(sl.d))}</span><h2>${SESSIONS[sl.type].n}</h2><p class="muted small">Environ ${estMinutes(items)} min · pas de série à l'échec : garde toujours 1 à 2 reps en réserve</p></div>
+  const block = (wk, W, label) => `<div class="row between"><h2>${label}</h2><span class="muted small">du ${frDate(wk)} au ${frDate(addDays(wk, 6))}</span></div>
+    ${W.msg ? `<p class="small" style="color:var(--blue)">ℹ️ ${W.msg}</p>` : ""}${W.slots.map((sl, i) => slotCard(wk, i, sl)).join("")}`;
+  const extra = !S.current && Wc ? extraButton() : "";
+  return `<h1>Séance</h1>${resume}${extra}
+  ${Wc ? block(cur, Wc, "Cette semaine") : `<div class="card hl"><h2>Pas encore de semaine prévue</h2><p class="muted">Choisis tes 3 jours : je prépare tout.</p><a class="btn primary big" href="#/generer">Générer ma semaine</a></div>`}
+  ${Wn ? block(nxt, Wn, "Semaine prochaine") : (Wc ? `<a class="btn ghost" href="#/generer">Préparer la semaine prochaine</a>` : "")}
+  <p class="muted small center">Touche une séance pour voir son contenu en détail, même avant le jour J.</p>`;
+}
+function viewSlotDetail(wk, i) {
+  const cur = weekKey(today()), W = S.weeks[wk], sl = W.slots[i], items = buildSession(sl.type), st = muStage(), ss = slotStatus(sl);
+  const isCur = wk === cur, canStart = isCur && !S.current && !sl.done && sl.d <= today();
+  let action = "";
+  if (S.current) action = `<button class="btn primary big" data-a="resume">Reprendre la séance en cours</button>`;
+  else if (sl.done) action = `<p class="center muted">✅ Séance déjà faite</p>`;
+  else if (canStart) action = `<button class="btn primary big" data-a="start" data-wk="${wk}" data-slot="${i}">${sl.d === today() ? "Démarrer" : "Rattraper cette séance"}</button>
+      <button class="link" data-a="start" data-wk="${wk}" data-slot="${i}" data-short="1">Je n'ai que 30 min (${estMinutes(buildSession(sl.type, undefined, true))} min)</button>`;
+  else action = `<p class="muted small center">${isCur ? `Prévue ${dayName(sl.d)}.` : "Cette séance est prévue la semaine prochaine."} Tu peux la regarder en avance${isCur ? "" : " : les charges et les reps peuvent encore s'ajuster d'ici là"}.</p>`;
+  return `<a class="back" href="#/seance" data-a="close-slot">‹ Toutes les séances</a>
+  <div class="card"><div class="row between"><div><span class="eyebrow">${cap(frDateLong(sl.d))}</span><h2>${SESSIONS[sl.type].n}</h2></div><span class="pill ${ss.c}">${ss.t}</span></div>
+    <p class="muted small">Environ ${estMinutes(items)} min · pas de série à l'échec : garde toujours 1 à 2 reps en réserve</p>
     <div>
       <div class="line"><span style="font-size:22px">🔥</span><div class="grow"><div class="t">Échauffement guidé</div><div class="muted small">5 minutes, au début de la séance</div></div></div>
       ${items.map((it) => `<div class="line" data-a="fiche" data-ex="${it.exId}" style="cursor:pointer"><div class="grow">
         <div class="t">${esc(exName(it.exId))}${it.kg ? ` <span class="pill">🎒 +${fmtKg(it.kg)} kg</span>` : ""}</div>
         <div class="muted small">${targetsLabel(it)}${it.tweak ? " · " + tweakText(it.tweak).toLowerCase() : ""}${it.origId ? ` · remplace ${esc(exName(it.origId))}` : ""}</div></div><span class="muted">ⓘ</span></div>`).join("")}
     </div>
-    ${S.current ? "" : sl.done ? `<p class="center muted">✅ Séance déjà faite</p>` : `<button class="btn primary big" data-a="start" data-wk="${wk}" data-slot="${sel}">Démarrer</button>
-      <button class="link" data-a="start" data-wk="${wk}" data-slot="${sel}" data-short="1">Je n'ai que 30 min (${estMinutes(buildSession(sl.type, undefined, true))} min)</button>
-      <button class="link" data-a="move-slot" data-i="${sel}">📅 Déplacer cette séance</button>`}</div>
+    ${action}
+    ${!sl.done ? `<button class="link" data-a="move-slot" data-wk="${wk}" data-i="${i}">📅 Déplacer cette séance</button>` : ""}</div>
   <div class="card soft"><span class="eyebrow">Piste muscle-up</span><p class="small">${muTip(st)}</p></div>`;
 }
-ACTIONS["sel-slot"] = (el) => { UI.selSlot = +el.dataset.i; render(); };
+ACTIONS["open-slot"] = (el) => { UI.openSlot = { wk: el.dataset.wk, i: +el.dataset.i }; UI.fromStrip = true; render(); window.scrollTo(0, 0); };
+ACTIONS["close-slot"] = (el, e) => { UI.openSlot = null; UI.fromStrip = false; render(); window.scrollTo(0, 0); };
 ACTIONS["move-slot"] = (el) => {
-  const wk = weekKey(today()), W = weekPlan(wk), i = +el.dataset.i, sl = W.slots[i];
+  const wk = el.dataset.wk, W = weekPlan(wk), i = +el.dataset.i, sl = W.slots[i];
   const opts = Array.from({ length: 7 }, (_, k) => addDays(wk, k)).filter((d) => d >= today() && (d === sl.d || !W.slots.some((s) => s.d === d)));
   openSheet(`<div class="row between"><h2>Déplacer la séance</h2><button class="icon-btn" data-a="close-sheet" aria-label="Fermer">✕</button></div>
     <p class="muted small">Choisis le nouveau jour. Si deux séances se suivent, la plus légère passera en 2e.</p>
-    <div class="grid2">${opts.map((d) => `<button class="btn ${d === sl.d ? "primary" : ""}" data-a="move-do" data-i="${i}" data-d="${d}">${cap(dayName(d))} ${parseYmd(d).getDate()}</button>`).join("")}</div>`);
+    <div class="grid2">${opts.map((d) => `<button class="btn ${d === sl.d ? "primary" : ""}" data-a="move-do" data-wk="${wk}" data-i="${i}" data-d="${d}">${cap(dayName(d))} ${parseYmd(d).getDate()}</button>`).join("")}</div>`);
 };
 ACTIONS["move-do"] = (el) => {
-  const wk = weekKey(today());
-  if (moveSlot(wk, +el.dataset.i, el.dataset.d)) { const W = weekPlan(wk); UI.selSlot = W.slots.findIndex((s) => s.d === el.dataset.d); toast("Séance déplacée"); }
+  const wk = el.dataset.wk;
+  if (moveSlot(wk, +el.dataset.i, el.dataset.d)) { UI.openSlot = { wk, i: weekPlan(wk).slots.findIndex((s) => s.d === el.dataset.d) }; toast("Séance déplacée"); }
   closeSheet(); render();
+};
+ACTIONS["extra-ask"] = () => {
+  const r = extraSession(true);
+  if (!r.ok) return toast(r.reason === "full" ? "Tes 3 séances de la semaine sont faites : repos !" : "Pas de séance à avancer aujourd'hui");
+  openSheet(`<div class="row between"><h2>Séance aujourd'hui</h2><button class="icon-btn" data-a="close-sheet" aria-label="Fermer">✕</button></div>
+    <p>Je te propose : <b>${SESSIONS[r.type].n}</b>.</p>
+    <p class="muted small">C'est la plus logique en respectant le repos entre deux séances lourdes. Le reste de ta semaine est réajusté :</p>
+    <div class="card soft">${r.slots.map((x) => `<div class="line"><b style="min-width:90px">${cap(dayName(x.d))}</b><span>${SESSIONS[x.type].n}${x.done ? " ✓" : ""}${x.d === today() ? " · aujourd'hui" : ""}</span></div>`).join("")}</div>
+    <button class="btn primary big" data-a="extra-go">C'est parti</button><button class="btn ghost" data-a="close-sheet">Annuler</button>`);
+};
+ACTIONS["extra-go"] = () => {
+  const r = extraSession(false); closeSheet();
+  if (!r.ok) return toast("Impossible pour aujourd'hui");
+  toast("Semaine réajustée ✔");
+  ACTIONS.start({ dataset: { wk: r.wk, slot: String(r.idx) } });
 };
 ACTIONS.fiche = (el) => {
   const ex = EXERCISES[el.dataset.ex];
@@ -608,6 +666,7 @@ function render() {
   const active = SUB[r] || r;
   tabs.querySelectorAll("a").forEach((a) => a.classList.toggle("on", a.dataset.tab === active));
   if (r === "manger" && lastRoute !== "manger") { if (!UI.fromToday) { UI.mealDate = null; UI.mealSlot = null; } UI.fromToday = false; }
+  if (r === "seance" && lastRoute !== "seance") { if (!UI.fromStrip) UI.openSlot = null; UI.fromStrip = false; }
   if (r !== "generer") { UI.genWk = null; UI.genDays = []; UI.genTouched = false; UI.genEasy = false; }
   view.innerHTML = VIEWS[r]();
   if (lastRoute !== r) { window.scrollTo(0, 0); lastRoute = r; }

@@ -145,3 +145,17 @@ div.cap1, p.cap1 { display: block; }
 .gear { display: grid; place-items: center; text-decoration: none; }
 .small.acc, .t.acc { color: var(--acc); }
 button:disabled { cursor: default; }
+
+.strip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.wd { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 1px; min-height: 72px; padding: 6px 0 4px; border-radius: 12px; background: var(--card2); border: 1px solid var(--line); color: var(--muted); font: inherit; min-width: 0; overflow: hidden; }
+.wd .wl { font-size: 12px; font-weight: 800; }
+.wd .wn { font-size: 15px; font-weight: 800; }
+.wd .ws { font-size: 8.5px; font-weight: 800; line-height: 1.15; letter-spacing: -.02em; white-space: nowrap; display: block; max-width: 100%; }
+button.wd { cursor: pointer; }
+.wd.ses { background: var(--acc); border-color: var(--acc); color: var(--acc-ink); }
+.wd.ses.done .ws { font-size: 17px; }
+.wd.today { outline: 2px solid var(--txt); outline-offset: 2px; }
+.slotcard { cursor: pointer; }
+.exrow { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-weight: 600; }
+.exrow:first-child { border-top: 0; }
+.exrow > span:last-child { text-align: right; flex: 0 0 auto; }
