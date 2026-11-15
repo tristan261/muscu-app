@@ -200,15 +200,10 @@ ACTIONS["ss-finish"] = () => {
   const gatesBefore = muGates();
   const sess = {
     id: uid(), d: C.d, type: C.type, short: !!C.short, parkId: C.parkId, startedAt: C.startedAt, endedAt: Date.now(),
-    items: C.items.map((it) => ({ key: it.key, lad: it.lad, exId: it.exId, origId: it.origId, kg: it.kg, unit: it.unit, lo: it.lo, hi: it.hi, mu: it.mu, tries: it.tries, volume: it.volume, sets: it.sets.map((s) => ({ r: s.r, t: s.t, done: s.done })) })),
+    items: C.items.map((it) => ({ key: it.key, lad: it.lad, exId: it.exId, origId: it.origId, kg: it.kg, unit: it.unit, lo: it.lo, hi: it.hi, mu: it.mu, tries: it.tries, volume: it.volume, planned: it.planned, rg: it.rg, sets: it.sets.map((s) => ({ r: s.r, t: s.t, done: s.done })) })),
   };
-  S.sessions.push(sess);
-  const W = S.weeks[C.wk]; if (W && W.slots[C.slotIdx]) W.slots[C.slotIdx].done = sess.id;
   S.current = null;
-  const mu = sess.items.some((it) => it.exId === "muscle_up" && !it.origId && it.sets.some((s) => s.done && s.r >= 1));
-  if (mu && !S.muscleUp) S.muscleUp = C.d;
-  const notes = evaluateSession(sess);
-  saveState();
+  const { notes, mu } = commitSession(sess, { wk: C.wk, idx: C.slotIdx });
   const prs = RECORD_TYPES.filter((r) => before[r.id] > 0 && bestRecord(r.id) > before[r.id]).map((r) => ({ n: r.n, v: bestRecord(r.id) }));
   const gatesAfter = muGates(), newGates = MU_GATES.filter((g, i) => gatesAfter[i] && !gatesBefore[i] && i < 3);
   const badges = checkBadges();

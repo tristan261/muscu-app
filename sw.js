@@ -1,5 +1,5 @@
 /* FORGE — service worker : l'app fonctionne hors connexion */
-const CACHE = "forge-v3";
+const CACHE = "forge-v4";
 const ASSETS = [
   "./", "index.html", "style.css", "manifest.webmanifest",
   "js/data.js", "js/store.js", "js/logic.js", "js/ui.js", "js/session.js",

@@ -2,9 +2,9 @@
 "use strict";
 
 const $ = (sel, root = document) => root.querySelector(sel);
-const UI = { openSlot: null, fromStrip: false, selSlot: null, genWk: null, genDays: [], genEasy: false, mangerTab: "now", mealDate: null, mealSlot: null, weekOff: 0, weekDi: null, recType: "tractions", cmpA: null, cmpB: null, parkDraft: null, suppress: 0, nowOverride: null };
+const UI = { ready: null, stripNext: false, off: null, openSlot: null, fromStrip: false, selSlot: null, genWk: null, genDays: [], genEasy: false, mangerTab: "now", mealDate: null, mealSlot: null, weekOff: 0, weekDi: null, recType: "tractions", cmpA: null, cmpB: null, parkDraft: null, suppress: 0, nowOverride: null };
 const ACTIONS = {};
-const SUB = { generer: "today", reglages: "today", fiches: "today", parcs: "today", badges: "today", rappels: "today", photos: "bilan" };
+const SUB = { horsapp: "seance", generer: "today", reglages: "today", fiches: "today", parcs: "today", badges: "today", rappels: "today", photos: "bilan" };
 
 /* ---------- Outils d'interface ---------- */
 let toastTimer = null;
@@ -88,13 +88,18 @@ function sessionCard() {
   }
   const t = todayState();
   if (t.status === "noplan") {
+    const n = nextSession();
+    if (n) {
+      return `<div class="card hl"><span class="eyebrow">Ta semaine</span><h2>Prochaine séance : ${dayName(n.d)} – ${SESSIONS[n.type].n}</h2>
+        <p class="muted">Pas de séance prévue aujourd'hui.</p>${extraButton()}<a class="btn" href="#/generer">Générer ma semaine</a></div>`;
+    }
     return `<div class="card hl"><span class="eyebrow">Ta semaine</span><h2>Pas encore de semaine prévue</h2>
-      <p class="muted">Tu choisis tes 3 jours, je prépare tes séances, tes repas et ta liste de courses.</p>
-      <a class="btn primary big" href="#/generer">Générer ma semaine</a></div>`;
+      <p class="muted">Tu choisis tes jours, je prépare tes séances, tes repas et ta liste de courses.</p>
+      <a class="btn primary big" href="#/generer">Générer ma semaine</a>${extraButton()}</div>`;
   }
   if (t.status === "train") {
     const type = t.slot.type, items = buildSession(type), mins = estMinutes(items), short = estMinutes(buildSession(type, undefined, true));
-    return `<div class="card hl"><span class="eyebrow">Séance ${t.n} sur 3 cette semaine</span><h2>${SESSIONS[type].n}</h2>
+    return `<div class="card hl"><span class="eyebrow">Séance ${t.n} sur ${t.W.slots.length} cette semaine</span><h2>${SESSIONS[type].n}</h2>
       <p class="muted">Environ ${mins} minutes, échauffement compris${SESSIONS[type].heavy ? "" : " · séance plus légère"}</p>
       <button class="btn primary big" data-a="start" data-wk="${t.wk}" data-slot="${t.idx}">Démarrer</button>
       <button class="link" data-a="start" data-wk="${t.wk}" data-slot="${t.idx}" data-short="1">Je n'ai que 30 min (version courte, ${short} min)</button></div>`;
@@ -102,7 +107,7 @@ function sessionCard() {
   if (t.status === "done") {
     const n = t.W.slots.filter((s) => s.done).length;
     return `<div class="card"><span class="eyebrow">Séance du jour</span><h2>✅ Séance faite</h2>
-      <p class="muted">${n} sur 3 cette semaine. Maintenant mange bien et dors : c'est là que le muscle se construit.</p></div>`;
+      <p class="muted">${n} sur ${t.W.slots.length} cette semaine. Maintenant mange bien et dors : c'est là que le muscle se construit.</p></div>`;
   }
   return `<div class="card"><span class="eyebrow">Aujourd'hui</span><h2>😴 Repos aujourd'hui : mange bien</h2>
     <p class="muted">Les muscles grandissent quand tu récupères.</p>${extraButton()}</div>`;
@@ -114,19 +119,24 @@ function extraButton() {
 }
 const STRIP_NAME = { S1: "Tirage", S2: "Poussée", S3: "Tech." };
 function weekStrip() {
-  const wk = weekKey(today()), L = ["L", "M", "M", "J", "V", "S", "D"], days = weekDays(wk);
+  const cur = weekKey(today()), nxt = addDays(cur, 7), hasNext = !!S.weeks[nxt], showNext = !!UI.stripNext && hasNext, wk = showNext ? nxt : cur;
+  const L = ["L", "M", "M", "J", "V", "S", "D"], days = weekDays(wk);
   const cells = days.map((x) => {
     const cls = ["wd", x.slot ? "ses" : "", x.slot && x.slot.done ? "done" : "", x.d === today() ? "today" : ""].join(" ");
     const inner = `<span class="wl">${L[x.di]}</span><span class="wn">${parseYmd(x.d).getDate()}</span><span class="ws">${x.slot ? (x.slot.done ? "✓" : STRIP_NAME[x.slot.type]) : ""}</span>`;
     return x.slot ? `<button class="${cls}" data-a="strip-day" data-wk="${wk}" data-i="${x.idx}" aria-label="${cap(dayName(x.d))} : ${SESSIONS[x.slot.type].n}${x.slot.done ? " (faite)" : ""}">${inner}</button>` : `<div class="${cls}">${inner}</div>`;
   }).join("");
   let line = "";
-  if (!days.some((x) => x.d === today() && x.slot)) {
+  if (showNext) line = `Semaine du ${frDate(wk)} au ${frDate(addDays(wk, 6))}`;
+  else if (!days.some((x) => x.d === today() && x.slot)) {
     const n = nextSession(), od = overdueSession();
     line = n ? `Prochaine séance : ${dayName(n.d)} – ${SESSIONS[n.type].n}` : od ? `Séance à rattraper : ${SESSIONS[od.type].n}` : "";
   }
-  return `<div class="card" style="gap:8px"><span class="eyebrow">Ma semaine</span><div class="strip">${cells}</div>${line ? `<p class="small acc" style="font-weight:650">${line}</p>` : ""}</div>`;
+  const tabs = hasNext ? `<div class="seg"><button class="${showNext ? "" : "on"}" data-a="strip-week" data-next="0">Cette semaine</button><button class="${showNext ? "on" : ""}" data-a="strip-week" data-next="1">Semaine prochaine</button></div>` : "";
+  return `<div class="card" style="gap:8px"><span class="eyebrow">Ma semaine</span>${tabs}<div class="strip">${cells}</div>${line ? `<p class="small acc" style="font-weight:650">${line}</p>` : ""}</div>`;
 }
+ACTIONS["strip-week"] = (el) => { UI.stripNext = el.dataset.next === "1"; render(); };
+ACTIONS["ready-close"] = () => { UI.ready = null; render(); };
 ACTIONS["strip-day"] = (el) => { UI.openSlot = { wk: el.dataset.wk, i: +el.dataset.i }; UI.fromStrip = true; go("seance"); };
 function mealsCard() {
   const d = today(), c = checksOf(d), ed = (S.eaten && S.eaten[d]) || {}, times = mealTimes(d), nx = currentSlotIdx(nowHM());
@@ -144,6 +154,7 @@ function viewToday() {
   return `
   <div class="row between"><div><p class="muted small">${cap(frDateLong(today()))}</p><h1>Salut${nm}</h1></div>
     <a class="icon-btn gear" href="#/reglages" aria-label="Réglages">⚙️</a></div>
+  ${UI.ready ? `<div class="card hl"><div class="row between"><b>✅ ${UI.ready}</b><button class="icon-btn" data-a="ready-close" aria-label="Fermer">✕</button></div></div>` : ""}
   ${weekStrip()}
   <div class="row"><span class="pill ${st ? "acc" : ""}">${st ? "🔥" : "✨"} ${st} semaine${st > 1 ? "s" : ""} d'affilée avec 3 séances</span></div>
   ${sessionCard()}${mealsCard()}`;
@@ -158,53 +169,60 @@ ACTIONS["meal-check"] = (el) => {
 
 /* ================= 2. GÉNÉRER MA SEMAINE ================= */
 function genState() {
-  const cur = weekKey(today());
-  const wk = UI.genWk || (S.weeks[cur] ? addDays(cur, 7) : cur);
-  if (UI.genWk !== wk || !UI.genDays.length) {
-    const reinit = UI.genWk !== wk || !UI.genTouched;
+  const cur = weekKey(today()), nxt = addDays(cur, 7), Wc = S.weeks[cur], oc = genOptions(cur);
+  const wk = UI.genWk || ((!Wc || (Wc.slots.length < 3 && oc.max > 0)) && oc.days.some((d) => !d.disabled) ? cur : nxt);
+  if (UI.genWk !== wk || !UI.genTouched) {
     UI.genWk = wk;
-    if (reinit) {
+    if (!UI.genTouched) {
+      const o = genOptions(wk), W = S.weeks[wk], ok = (d) => o.days.some((x) => x.d === d && !x.disabled);
       const base = wk === cur ? addDays(cur, -7) : cur;
-      const easy = !!S.weeks[base] && distinctDaysInWeek(base) < 2;
+      const easy = !!S.weeks[base] && distinctDaysInWeek(base) < 2 && wk !== cur;
       let days = easy ? EASY_DAYS.map((i) => addDays(wk, i)) : S.profile.days.map((wd) => addDays(wk, (wd + 6) % 7));
-      if (S.weeks[wk]) days = S.weeks[wk].slots.map((s) => s.d);
-      UI.genDays = days.filter((d) => d >= today()); UI.genEasy = easy;
+      if (W && wk === cur) { const pending = W.slots.filter((x) => !x.done).map((x) => x.d); if (pending.length) days = pending; }
+      UI.genDays = days.filter(ok).sort().slice(0, o.max); UI.genEasy = easy;
     }
   }
   return wk;
 }
 function viewGenerer() {
-  const wk = genState(), cur = weekKey(today()), W = S.weeks[wk], started = W && W.slots.some((s) => s.done);
-  const sel = [...UI.genDays].sort();
+  const wk = genState(), cur = weekKey(today()), o = genOptions(wk), sel = [...UI.genDays].sort();
+  const isCur = wk === cur, full = o.max === 0;
   let preview = "";
-  if (sel.length === 3) {
-    const types = assignTypes(sel, [null, null, null]), slots = sel.map((d, i) => ({ d, type: types[i] })), note = consecutiveNote(slots);
-    preview = `<div class="card soft"><span class="eyebrow">Ta semaine</span>${slots.map((s) => `<div class="line"><b style="min-width:90px">${cap(dayName(s.d))}</b><span>${SESSIONS[s.type].n}</span></div>`).join("")}
-      ${note ? `<p class="small" style="color:var(--blue)">ℹ️ ${note}</p>` : ""}</div>`;
+  if (sel.length >= 1 && sel.length <= o.max) {
+    try {
+      const b = buildWeek(wk, sel);
+      preview = `<div class="card soft"><span class="eyebrow">Ta semaine</span>${b.slots.map((x) => `<div class="line"><b style="min-width:90px">${cap(dayName(x.d))}</b><span>${SESSIONS[x.type].n}${x.done ? " ✓" : ""}</span></div>`).join("")}
+        ${b.msg ? `<p class="small" style="color:var(--blue)">ℹ️ ${b.msg}</p>` : ""}</div>`;
+    } catch (e) { preview = ""; }
   }
+  const hint = full ? "" : o.max < 3 ? `Il te reste <b>${o.max} séance${o.max > 1 ? "s" : ""}</b> à placer cette semaine : choisis <b>1${o.max > 1 ? " à " + o.max : ""} jour${o.max > 1 ? "s" : ""}</b>. Je mets en priorité le tirage + muscle-up, puis la poussée, puis la technique.`
+    : isCur ? "Choisis les jours qui te restent (1 à 3). Avec moins de 3 jours, je mets en priorité le tirage + muscle-up, puis la poussée." : "Choisis tes jours (3 de préférence, 1 ou 2 si la semaine est chargée).";
   return `${backLink("today", "Aujourd'hui")}<h1>Générer ma semaine</h1>
-  <div class="seg"><button class="${wk === cur ? "on" : ""}" data-a="gen-week" data-wk="${cur}">Cette semaine</button><button class="${wk !== cur ? "on" : ""}" data-a="gen-week" data-wk="${addDays(cur, 7)}">Semaine prochaine</button></div>
-  ${started ? `<div class="card soft"><b>Cette semaine est déjà commencée</b><p class="muted small">Tu ne peux pas la regénérer, mais tu peux déplacer une séance dans l'onglet Séance.</p></div>` : `
+  <div class="seg"><button class="${isCur ? "on" : ""}" data-a="gen-week" data-wk="${cur}">Cette semaine</button><button class="${!isCur ? "on" : ""}" data-a="gen-week" data-wk="${addDays(cur, 7)}">Semaine prochaine</button></div>
+  <p class="muted small center">Semaine du ${frDate(wk)} au ${frDate(addDays(wk, 6))}</p>
+  ${full ? `<div class="card soft"><b>Les 3 séances de cette semaine sont faites 🎉</b><p class="muted small">Il n'y a plus rien à planifier : mange bien et récupère. Tu peux préparer la semaine prochaine.</p></div>` : `
   ${UI.genEasy ? `<div class="card soft"><p class="small">La semaine dernière a été chargée, ça arrive. Je te propose des jours bien espacés pour repartir tranquille : change-les si tu veux.</p></div>` : ""}
-  <div class="card"><span class="eyebrow">1 · Touche tes 3 jours</span>
-    <div class="grid2">${Array.from({ length: 7 }, (_, i) => { const d = addDays(wk, i), on = UI.genDays.includes(d), past = d < today();
-      return `<button class="btn ${on ? "primary" : ""}" ${past ? 'disabled style="opacity:.35"' : ""} data-a="gen-day" data-d="${d}">${DAYS_FR[i]} ${parseYmd(d).getDate()}</button>`; }).join("")}</div>
-    <p class="muted small center">${sel.length}/3 jours choisis</p></div>
+  <div class="card"><span class="eyebrow">1 · Touche tes jours</span><p class="small">${hint}</p>
+    <div class="grid2">${o.days.map((x, i) => { const on = UI.genDays.includes(x.d);
+      return `<button class="btn ${on ? "primary" : ""}" ${x.disabled ? 'disabled style="opacity:.35"' : ""} data-a="gen-day" data-d="${x.d}">${DAYS_FR[i]} ${parseYmd(x.d).getDate()}${x.done ? " ✓" : ""}</button>`; }).join("")}</div>
+    <p class="muted small center">${sel.length}/${o.max} jour${o.max > 1 ? "s" : ""} choisi${sel.length > 1 ? "s" : ""}</p></div>
   ${preview}
   <div class="card"><span class="eyebrow">2 · C'est parti</span>
-    <p class="muted small">Je prépare d'un coup tes 3 séances (calées sur ton niveau du moment), ton plan repas des 7 jours et ta liste de courses.${W ? " Cela remplace la semaine déjà prévue." : ""}</p>
-    <button class="btn primary big" data-a="gen-do" ${sel.length === 3 ? "" : 'disabled style="opacity:.4"'}>Générer</button></div>`}`;
+    <p class="muted small">Je prépare tes séances (calées sur ton niveau du moment), ton plan repas et ta liste de courses.${S.weeks[wk] ? " Cela remplace les séances pas encore faites de cette semaine." : ""}</p>
+    <button class="btn primary big" data-a="gen-do" ${sel.length >= 1 && sel.length <= o.max ? "" : 'disabled style="opacity:.4"'}>Générer</button></div>`}`;
 }
 ACTIONS["gen-week"] = (el) => { UI.genWk = el.dataset.wk; UI.genDays = []; UI.genTouched = false; render(); };
 ACTIONS["gen-day"] = (el) => {
-  const d = el.dataset.d, i = UI.genDays.indexOf(d);
-  if (i >= 0) UI.genDays.splice(i, 1); else if (UI.genDays.length < 3) UI.genDays.push(d); else toast("3 jours maximum : retire-en un d'abord");
+  const d = el.dataset.d, i = UI.genDays.indexOf(d), o = genOptions(UI.genWk);
+  if (i >= 0) UI.genDays.splice(i, 1); else if (UI.genDays.length < o.max) UI.genDays.push(d); else toast(`${o.max} jour${o.max > 1 ? "s" : ""} au maximum : retires-en un d'abord`);
   UI.genEasy = false; UI.genTouched = true; render();
 };
 ACTIONS["gen-do"] = () => {
-  try { generateWeek(UI.genWk, UI.genDays); } catch (e) { return toast(e.message); }
-  const wk = UI.genWk; UI.genWk = null; UI.genDays = []; UI.genTouched = false; UI.selSlot = null; UI.weekOff = wk === weekKey(today()) ? 0 : 1;
-  toast("✅ Semaine prête : séances, repas et courses"); go("seance");
+  const wk = UI.genWk, cur = weekKey(today());
+  try { generateWeek(wk, UI.genDays); } catch (e) { return toast(e.message); }
+  UI.genWk = null; UI.genDays = []; UI.genTouched = false; UI.openSlot = null;
+  UI.ready = `Semaine du ${frDate(wk)} au ${frDate(addDays(wk, 6))} prête`; UI.stripNext = wk !== cur;
+  toast("✅ " + UI.ready); go("today");
 };
 
 /* ================= 3. SÉANCE ================= */
@@ -240,6 +258,7 @@ function viewSeance() {
   return `<h1>Séance</h1>${resume}${extra}
   ${Wc ? block(cur, Wc, "Cette semaine") : `<div class="card hl"><h2>Pas encore de semaine prévue</h2><p class="muted">Choisis tes 3 jours : je prépare tout.</p><a class="btn primary big" href="#/generer">Générer ma semaine</a></div>`}
   ${Wn ? block(nxt, Wn, "Semaine prochaine") : (Wc ? `<a class="btn ghost" href="#/generer">Préparer la semaine prochaine</a>` : "")}
+  <button class="btn" data-a="off-open">📝 J'ai fait une séance sans l'app</button>
   <p class="muted small center">Touche une séance pour voir son contenu en détail, même avant le jour J.</p>`;
 }
 function viewSlotDetail(wk, i) {
@@ -303,10 +322,91 @@ ACTIONS.fiche = (el) => {
 };
 ACTIONS["close-sheet"] = closeSheet;
 
+/* ================= 3 bis. SÉANCE FAITE SANS L'APP ================= */
+function offItems(type) {
+  return buildSession(type, null).map((it) => ({ key: it.key, lad: it.lad, rg: it.rg, exId: it.exId, planned: it.planned || it.sets.length, mu: !!it.mu, tries: !!it.tries, unit: it.unit, perSide: it.perSide, kgIn: it.kg ? fmtKg(it.kg) : "", vals: it.sets.map(() => ""), t: it.sets.map((x) => x.t) }));
+}
+function offInit() {
+  const d = today(), W = S.weeks[weekKey(d)], at = W && W.slots.find((x) => x.d === d && !x.done);
+  const type = at ? at.type : (weekRemaining(weekKey(d))[0] || "S1");
+  UI.off = { d, type, items: offItems(type) };
+}
+function offSync() {
+  if (!UI.off) return;
+  const dt = $("#off-d"); if (dt && dt.value) UI.off.d = dt.value;
+  document.querySelectorAll("[data-off='v']").forEach((el) => { UI.off.items[+el.dataset.i].vals[+el.dataset.j] = el.value; });
+  document.querySelectorAll("[data-off='kg']").forEach((el) => { UI.off.items[+el.dataset.i].kgIn = el.value; });
+}
+const offHasValues = () => UI.off.items.some((it) => it.vals.some((v) => String(v).trim() !== ""));
+function viewHorsApp() {
+  if (!UI.off) offInit();
+  const o = UI.off;
+  const item = (it, i) => {
+    const ex = EXERCISES[it.exId], rung = it.lad ? LADDERS[it.lad].rungs[it.rg] : null, isTime = (rung ? rung.unit : it.unit) === "s";
+    return `<div class="card"><div class="row between"><h3>${esc(ex.n)}</h3>${it.custom ? `<button class="btn sm ghost danger" data-a="off-rm" data-i="${i}" aria-label="Retirer">✕</button>` : `<button class="icon-btn" style="width:40px;height:40px" data-a="fiche" data-ex="${it.exId}" aria-label="Fiche">ⓘ</button>`}</div>
+      ${it.lad ? `<div class="field"><label for="off-var${i}">Variante faite</label><select id="off-var${i}" data-c="off" data-k="var" data-i="${i}">${LADDERS[it.lad].rungs.map((r, k) => `<option value="${k}" ${k === it.rg ? "selected" : ""}>${esc(EXERCISES[r.ex].n)}${r.weighted ? " (lesté)" : ""}</option>`).join("")}</select></div>` : ""}
+      ${rung && rung.weighted ? `<div class="field"><label for="off-kg${i}">Sac à dos (kg)</label><input type="text" inputmode="decimal" id="off-kg${i}" data-off="kg" data-i="${i}" value="${esc(it.kgIn)}" placeholder="1,5"></div>` : ""}
+      <p class="muted small">${it.tries ? "Un essai par case : 1 = réussi, 0 = raté." : `Reps${isTime ? " (secondes)" : it.perSide ? " par jambe" : ""} de chaque série faite. Laisse vide une série non faite.`}</p>
+      <div class="offgrid">${it.vals.map((v, j) => `<input type="text" inputmode="numeric" aria-label="Série ${j + 1}" data-off="v" data-i="${i}" data-j="${j}" value="${esc(v)}" placeholder="${it.t && it.t[j] != null ? it.t[j] : ""}">`).join("")}</div>
+      <button class="btn sm" data-a="off-addset" data-i="${i}">+ une série</button></div>`;
+  };
+  const exOpts = Object.keys(EXERCISES).sort((a, b) => exName(a).localeCompare(exName(b), "fr")).map((id) => `<option value="${id}">${esc(exName(id))}</option>`).join("");
+  return `${backLink("seance", "Séance")}<h1>Séance sans l'app</h1>
+  <p class="muted">Note après coup ce que tu as fait : elle compte comme une séance normale (records, progression, semaine).</p>
+  <div class="card"><div class="field"><label for="off-d">Date de la séance</label><input type="date" id="off-d" data-c="off" data-k="date" value="${o.d}" max="${today()}"></div>
+    <span class="eyebrow">Quelle séance ?</span>
+    <div class="seg">${ALL_TYPES.map((t) => `<button class="${o.type === t ? "on" : ""}" data-a="off-type" data-type="${t}">${SESSIONS[t].short}</button>`).join("")}</div>
+    <p class="small">${SESSIONS[o.type].n}</p></div>
+  ${o.items.map(item).join("")}
+  <div class="card"><span class="eyebrow">Un autre exercice ?</span>
+    <div class="field"><label for="off-ex">Exercice</label><select id="off-ex">${exOpts}</select></div>
+    <button class="btn" data-a="off-addex">+ Ajouter cet exercice</button></div>
+  <button class="btn primary big" data-a="off-save">Enregistrer la séance</button>`;
+}
+ACTIONS["off-open"] = () => { offInit(); go("horsapp"); };
+ACTIONS["off-type"] = (el) => {
+  offSync();
+  if (UI.off.type === el.dataset.type) return;
+  if (offHasValues() && !confirm("Changer de séance efface les reps déjà saisies. Continuer ?")) return;
+  UI.off.type = el.dataset.type; UI.off.items = offItems(el.dataset.type); render();
+};
+ACTIONS["off-addset"] = (el) => { offSync(); UI.off.items[+el.dataset.i].vals.push(""); render(); };
+ACTIONS["off-addex"] = () => {
+  offSync(); const id = $("#off-ex").value, ex = EXERCISES[id];
+  UI.off.items.push({ key: "x" + id, lad: null, rg: null, exId: id, planned: 0, mu: false, tries: false, unit: ex.unit || "reps", perSide: !!ex.perSide, kgIn: "", vals: ["", "", ""], t: [], custom: true });
+  render();
+};
+ACTIONS["off-rm"] = (el) => { offSync(); UI.off.items.splice(+el.dataset.i, 1); render(); };
+ACTIONS["off-save"] = () => {
+  offSync(); const o = UI.off;
+  if (!o.d || o.d > today()) return toast("Choisis une date qui n'est pas dans le futur");
+  const items = [];
+  o.items.forEach((it) => {
+    const rung = it.lad ? LADDERS[it.lad].rungs[it.rg] : null, exId = rung ? rung.ex : it.exId;
+    const sets = it.vals.map((v) => { const n = num(v); const has = String(v).trim() !== "" && isFinite(n) && n >= 0; return has && (it.tries || n > 0) ? { r: Math.min(999, Math.round(n)), t: null, done: true } : null; }).filter(Boolean);
+    if (!sets.length) return;
+    const kgIn = num(it.kgIn), kg = rung && rung.weighted ? (kgIn > 0 ? Math.min(KG_MAX, kgIn) : lp(it.lad).kg || KG_STEP) : 0;
+    items.push({ key: it.key, lad: it.lad, rg: it.rg, exId, origId: null, kg, unit: rung ? rung.unit || "reps" : it.unit, lo: rung ? rung.lo : 0, hi: rung ? rung.hi : 0, mu: it.mu, tries: it.tries, volume: false, planned: it.planned, manual: true, sets });
+  });
+  if (!items.length) return toast("Note les reps d'au moins une série");
+  const before = {}; RECORD_TYPES.forEach((r) => { before[r.id] = bestRecord(r.id); });
+  const sess = { id: uid(), d: o.d, type: o.type, manual: true, offApp: true, items };
+  const { notes, mu } = commitSession(sess, null);
+  const prs = RECORD_TYPES.filter((r) => before[r.id] > 0 && bestRecord(r.id) > before[r.id]).map((r) => `${r.n} : ${bestRecord(r.id)}`);
+  const badges = checkBadges();
+  UI.off = null; UI.openSlot = null;
+  openSheet(`<h2>${mu ? "👑 Muscle-up validé !" : "✅ Séance ajoutée"}</h2>
+    <p class="muted small">${cap(frDateLong(o.d))} · ${SESSIONS[o.type].n}. Elle compte dans ta semaine, tes records et ta progression.</p>
+    ${prs.length ? `<p>🏅 Nouveau record : <b>${prs.join(", ")}</b></p>` : ""}${badges.map((b) => `<p>${b.ic} Nouveau badge : <b>${b.n}</b></p>`).join("")}
+    <div class="card soft"><span class="eyebrow">La prochaine fois</span>${notes.map((x) => `<div class="line"><span>${x.kind === "up" ? "📈" : x.kind === "down" ? "🔧" : x.kind === "tweak" ? "🎯" : "➡️"}</span><div class="grow small">${esc(x.text)}</div></div>`).join("") || `<p class="muted small">Même objectif.</p>`}</div>
+    <button class="btn primary big" data-a="off-done">Terminé</button>`);
+};
+ACTIONS["off-done"] = () => { closeSheet(); go("seance"); };
+
 /* ================= 4. BILAN ================= */
 function viewBilan() {
   const wk = weekKey(today()), W = weekPlan(wk), p = S.profile, adv = applyWeightRule();
-  const done = W ? W.slots.filter((s) => s.done).length : distinctDaysInWeek(wk), meals = weekMealChecks(wk);
+  const done = Math.max(W ? W.slots.filter((s) => s.done).length : 0, distinctDaysInWeek(wk)), meals = weekMealChecks(wk);
   const w = sortedWeights(), cur = curKg();
   const stage = muStage(), gates = muGates();
   const ser = recordSeries(UI.recType), rt = RECORD_TYPES.find((r) => r.id === UI.recType);
@@ -653,11 +753,16 @@ const CHANGES = {
   day(el) { S.profile.days[+el.dataset.k] = +el.value; saveState(); },
   rem(el) { if (el.value) { S.reminders[el.dataset.k][+el.dataset.i] = el.value; saveState(); render(); } },
   cmp(el) { UI[el.dataset.k] = el.value; render(); },
+  off(el) {
+    offSync();
+    if (el.dataset.k === "var") { const it = UI.off.items[+el.dataset.i], rung = LADDERS[it.lad].rungs[+el.value]; it.rg = +el.value; it.exId = rung.ex; if (rung.weighted && !it.kgIn) it.kgIn = fmtKg(lp(it.lad).kg || KG_STEP); render(); }
+    else if (el.dataset.k === "date") { if (UI.off.d > today()) { UI.off.d = today(); toast("La date ne peut pas être dans le futur"); } render(); }
+  },
   spark(el) { if (typeof changeSessionPark === "function") changeSessionPark(el.value); },
 };
 
 /* ================= RENDU & DÉMARRAGE ================= */
-const VIEWS = { today: viewToday, seance: viewSeance, bilan: viewBilan, manger: viewManger, generer: viewGenerer, reglages: viewReglages, fiches: viewFiches, parcs: viewParcs, badges: viewBadges, rappels: viewRappels, photos: viewPhotos };
+const VIEWS = { horsapp: viewHorsApp, today: viewToday, seance: viewSeance, bilan: viewBilan, manger: viewManger, generer: viewGenerer, reglages: viewReglages, fiches: viewFiches, parcs: viewParcs, badges: viewBadges, rappels: viewRappels, photos: viewPhotos };
 let lastRoute = null;
 function render() {
   const view = $("#view"), tabs = $("#tabs");
@@ -667,6 +772,8 @@ function render() {
   tabs.querySelectorAll("a").forEach((a) => a.classList.toggle("on", a.dataset.tab === active));
   if (r === "manger" && lastRoute !== "manger") { if (!UI.fromToday) { UI.mealDate = null; UI.mealSlot = null; } UI.fromToday = false; }
   if (r === "seance" && lastRoute !== "seance") { if (!UI.fromStrip) UI.openSlot = null; UI.fromStrip = false; }
+  if (r !== "today") UI.ready = null;
+  if (r !== "horsapp") UI.off = null;
   if (r !== "generer") { UI.genWk = null; UI.genDays = []; UI.genTouched = false; UI.genEasy = false; }
   view.innerHTML = VIEWS[r]();
   if (lastRoute !== r) { window.scrollTo(0, 0); lastRoute = r; }

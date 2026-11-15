@@ -101,7 +101,7 @@ function buildLadderItem(slot, equip) {
   const { exId, origId, lo, hi, unit } = substitute({ ex: rung.ex, lo: rung.lo, hi: rung.hi, unit: rung.unit }, equip);
   const ex = EXERCISES[exId];
   const kg = origId ? 0 : kgFor(p, rung);
-  const it = { key: slot.key || key, lad: key, exId, origId, kg, unit, lo, hi, perSide: !!ex.perSide, tweak: origId ? null : p.tweak, volume: !!slot.volume, sets: [] };
+  const it = { key: slot.key || key, lad: key, rg: p.r, exId, origId, kg, unit, lo, hi, perSide: !!ex.perSide, tweak: origId ? null : p.tweak, volume: !!slot.volume, planned: slot.sets, sets: [] };
   const last = origId || slot.volume ? null : lastHist(key, exId, kg);
   const seed = seedReps(key, rung, p);
   for (let i = 0; i < slot.sets; i++) {
@@ -172,7 +172,7 @@ function evaluateSession(sess) {
     if (rung.ex !== it.exId) return;
     const total = sum(vals), prev = lastHist(key, it.exId, it.kg || 0, sess.id);
     const prevTotal = prev ? sum(prev.sets.filter((s) => s.done).map((s) => s.r)) : -1;
-    const top = vals.length >= it.sets.length && it.sets.every((s) => s.done && s.r >= it.hi);
+    const need = it.planned || it.sets.length, top = vals.length >= need && vals.every((r) => r >= it.hi);
     const miss = total / vals.length < it.lo;
     p.up = top ? p.up + 1 : 0;
     p.down = miss ? p.down + 1 : 0;
@@ -210,43 +210,92 @@ function muNote(it, name) {
 
 /* ================= SEMAINE D'ENTRAÎNEMENT ================= */
 const isHeavy = (type) => !!(SESSIONS[type] && SESSIONS[type].heavy);
-function permutations(a) { if (a.length <= 1) return [a]; return a.flatMap((x, i) => permutations([...a.slice(0, i), ...a.slice(i + 1)]).map((p) => [x, ...p])); }
-/* Répartit S1/S2/S3 sur des jours triés. fixed[i] = type déjà imposé (séance déjà faite) ou null.
-   Règle : jamais deux séances lourdes sur deux jours consécutifs (S3 = séance légère). */
-function assignTypes(dates, fixed) {
-  const used = fixed.filter(Boolean), free = ["S1", "S2", "S3"].filter((t) => !used.includes(t));
-  const heavyBefore = S.sessions.some((s) => s.d === addDays(dates[0], -1) && isHeavy(s.type));
-  let best = null, bs = Infinity;
-  permutations(free).forEach((perm) => {
+const ALL_TYPES = ["S1", "S2", "S3"]; // par priorité : tirage + muscle-up, poussée + jambes, technique
+const byDate = (a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0);
+function arrangements(a, k) { // toutes les façons de placer k éléments de a (sans réutiliser un même élément)
+  if (k === 0) return [[]];
+  return a.flatMap((x, i) => arrangements([...a.slice(0, i), ...a.slice(i + 1)], k - 1).map((p) => [x, ...p]));
+}
+function combos(a, k, start = 0) { // sous-ensembles de taille k, dans l'ordre de priorité
+  if (k === 0) return [[]];
+  const out = [];
+  for (let i = start; i <= a.length - k; i++) combos(a, k - 1, i + 1).forEach((c) => out.push([a[i], ...c]));
+  return out;
+}
+/* Meilleur placement de `pool` sur les jours sans type imposé. Règle : jamais deux séances lourdes consécutives. */
+function bestAssign(dates, fixed, pool) {
+  const heavyBefore = S.sessions.some((x) => x.d === addDays(dates[0], -1) && isHeavy(x.type));
+  let best = null;
+  arrangements(pool, fixed.filter((f) => !f).length).forEach((perm) => {
     let k = 0; const types = fixed.map((f) => f || perm[k++]);
     let viol = heavyBefore && isHeavy(types[0]) ? 1 : 0;
     for (let i = 1; i < dates.length; i++) if (daysBetween(dates[i - 1], dates[i]) === 1 && isHeavy(types[i - 1]) && isHeavy(types[i])) viol++;
     let inv = 0; for (let i = 0; i < types.length; i++) for (let j = i + 1; j < types.length; j++) if (types[i] > types[j]) inv++;
     const score = viol * 100 + inv;
-    if (score < bs) { bs = score; best = types; }
+    if (!best || score < best.score) best = { types, viol, score };
   });
   return best;
 }
+/* Choisit quelles séances placer (par priorité) et où : on garde les plus importantes tant que la règle des jours le permet. */
+function assignTypes(dates, fixed, remaining) {
+  const k = fixed.filter((f) => !f).length;
+  if (!k) return fixed.slice();
+  if (!remaining) remaining = ALL_TYPES.filter((t) => !fixed.includes(t));
+  const pool = remaining.length >= k ? remaining : remaining.concat(Array(k - remaining.length).fill("S3"));
+  let best = null;
+  for (const sub of combos(pool, k)) {
+    const r = bestAssign(dates, fixed, sub);
+    if (!best || r.viol < best.viol) best = r;
+    if (best.viol === 0) break;
+  }
+  return best.types;
+}
+function doneTypes(wk, slots) { // séances déjà faites cette semaine (dans le planning ou hors planning)
+  const t = new Set();
+  (slots || []).forEach((x) => { if (x.done) t.add(x.type); });
+  S.sessions.forEach((x) => { if (weekKey(x.d) === wk && SESSIONS[x.type]) t.add(x.type); });
+  return t;
+}
+const weekRemaining = (wk, slots) => { const dt = doneTypes(wk, slots !== undefined ? slots : (S.weeks[wk] || { slots: [] }).slots); return ALL_TYPES.filter((t) => !dt.has(t)); };
+function reassignTypes(W, wk) {
+  const sorted = [...W.slots].sort(byDate), rem = weekRemaining(wk, sorted);
+  const types = assignTypes(sorted.map((x) => x.d), sorted.map((x) => (x.done ? x.type : null)), rem);
+  sorted.forEach((x, i) => { if (!x.done) x.type = types[i]; });
+  W.slots = sorted; W.msg = consecutiveNote(W.slots);
+}
 function consecutiveNote(slots) {
-  const sorted = [...slots].sort((a, b) => (a.d < b.d ? -1 : 1));
+  const sorted = [...slots].sort(byDate);
   for (let i = 1; i < sorted.length; i++) {
     if (daysBetween(sorted[i - 1].d, sorted[i].d) === 1) {
-      const light = [sorted[i - 1], sorted[i]].find((s) => s.type === "S3") || sorted[i];
+      const light = [sorted[i - 1], sorted[i]].find((x) => x.type === "S3") || sorted[i];
       return `Tes deux jours se suivent : la séance du ${dayName(light.d)} est la séance technique, plus légère.`;
     }
   }
   return "";
 }
 const weekPlan = (wk) => S.weeks[wk] || null;
-function generateWeek(wk, dates) {
+/* Calcule une semaine (sans l'enregistrer) : 1 à 3 jours ; les séances déjà faites sont conservées ;
+   avec moins de 3 jours, priorité au tirage + muscle-up, puis à la poussée, puis à la technique. */
+function buildWeek(wk, dates) {
   dates = [...new Set(dates)].sort();
-  if (dates.length !== 3) throw new Error("Choisis exactement 3 jours.");
+  if (dates.length < 1) throw new Error("Choisis au moins 1 jour.");
   if (dates.some((d) => weekKey(d) !== wk)) throw new Error("Les jours doivent être dans la même semaine.");
-  const types = assignTypes(dates, [null, null, null]);
-  const slots = dates.map((d, i) => ({ d, type: types[i], done: null }));
-  S.weeks[wk] = { slots, msg: consecutiveNote(slots), at: today() };
-  generateMeals(wk);
-  S.shop[wk] = {};
+  const W0 = S.weeks[wk], kept = W0 ? W0.slots.filter((x) => x.done) : [];
+  if (dates.some((d) => kept.some((x) => x.d === d))) throw new Error("Ce jour a déjà une séance faite.");
+  const rem = weekRemaining(wk, kept);
+  if (dates.length > rem.length) throw new Error(rem.length ? `Il ne reste que ${rem.length} séance${rem.length > 1 ? "s" : ""} à planifier cette semaine.` : "Les 3 séances de cette semaine sont déjà faites.");
+  const all = kept.map((x) => ({ d: x.d, done: x.done, type: x.type })).concat(dates.map((d) => ({ d, done: null, type: null }))).sort(byDate);
+  const types = assignTypes(all.map((x) => x.d), all.map((x) => (x.done ? x.type : null)), rem);
+  const slots = all.map((x, i) => ({ d: x.d, type: types[i], done: x.done || null }));
+  let msg = consecutiveNote(slots);
+  if (slots.length < 3) msg = `Semaine incomplète : j'ai mis en priorité ${slots.filter((x) => !x.done).map((x) => SESSIONS[x.type].n.toLowerCase()).join(", puis ")}.` + (msg ? " " + msg : "");
+  return { slots, msg };
+}
+function generateWeek(wk, dates) {
+  const { slots, msg } = buildWeek(wk, dates), isCur = wk === weekKey(today());
+  S.weeks[wk] = { slots, msg, at: today() };
+  generateMeals(wk, isCur ? today() : undefined); // semaine en cours : on garde les repas déjà passés
+  if (!isCur) S.shop[wk] = {};
   Object.keys(S.weeks).forEach((k) => { if (daysBetween(k, wk) > 56) delete S.weeks[k]; });
   saveState();
   return S.weeks[wk];
@@ -254,12 +303,8 @@ function generateWeek(wk, dates) {
 /* Déplace une séance dans la semaine W (sans enregistrer) : réaffecte les types des séances non faites. */
 function applyMove(W, idx, newDate) {
   const sl = W.slots[idx];
-  if (!sl || sl.done || weekKey(newDate) !== weekKey(sl.d) || W.slots.some((s, i) => i !== idx && s.d === newDate)) return false;
-  sl.d = newDate;
-  const sorted = [...W.slots].sort((a, b) => (a.d < b.d ? -1 : 1));
-  const types = assignTypes(sorted.map((s) => s.d), sorted.map((s) => (s.done ? s.type : null)));
-  sorted.forEach((s, i) => { if (!s.done) s.type = types[i]; });
-  W.slots = sorted; W.msg = consecutiveNote(W.slots);
+  if (!sl || sl.done || weekKey(newDate) !== weekKey(sl.d) || W.slots.some((x, i) => i !== idx && x.d === newDate)) return false;
+  sl.d = newDate; reassignTypes(W, weekKey(newDate));
   return true;
 }
 function moveSlot(wk, idx, newDate) {
@@ -267,41 +312,93 @@ function moveSlot(wk, idx, newDate) {
   saveState(); return true;
 }
 /* « Faire une séance aujourd'hui quand même » (jour non prévu).
-   On avance la séance en retard, sinon la plus proche ; les types des séances restantes sont réaffectés
-   pour garder la règle des jours (pas 2 séances lourdes de suite), ce qui choisit la séance la plus logique. */
+   - une séance du planning reste à faire : on avance la séance en retard, sinon la plus proche ;
+   - sinon (pas de planning, ou planning incomplet) : on ajoute une séance du jour.
+   Dans tous les cas les types sont réaffectés selon ce qui est déjà fait et la règle des jours. */
 function extraSession(dry) {
-  const wk = weekKey(today()), W = S.weeks[wk];
-  if (!W) return { ok: false, reason: "noplan" };
-  if (W.slots.some((s) => s.d === today())) return { ok: false, reason: "planned" };
-  const undone = W.slots.map((s, i) => ({ s, i })).filter((x) => !x.s.done).sort((a, b) => (a.s.d < b.s.d ? -1 : 1));
-  if (!undone.length) return { ok: false, reason: "full" };
-  const pick = undone.find((x) => x.s.d < today()) || undone[0];
-  const W2 = JSON.parse(JSON.stringify(W));
-  if (!applyMove(W2, pick.i, today())) return { ok: false, reason: "impossible" };
-  const idx = W2.slots.findIndex((s) => s.d === today()), note = consecutiveNote(W2.slots);
-  W2.msg = "Tu as ajouté une séance aujourd'hui : le reste de ta semaine est réajusté." + (note ? " " + note : "");
-  const res = { ok: true, wk, idx, type: W2.slots[idx].type, slots: W2.slots.map((s) => ({ d: s.d, type: s.type, done: !!s.done })) };
-  if (!dry) { S.weeks[wk] = W2; saveState(); }
+  const wk = weekKey(today()), W0 = S.weeks[wk];
+  const W = W0 ? JSON.parse(JSON.stringify(W0)) : { slots: [], msg: "", at: today() };
+  if (W.slots.some((x) => x.d === today())) return { ok: false, reason: "planned" };
+  const undone = W.slots.map((x, i) => ({ x, i })).filter((o) => !o.x.done).sort((a, b) => byDate(a.x, b.x));
+  if (undone.length) {
+    const pick = undone.find((o) => o.x.d < today()) || undone[0];
+    if (!applyMove(W, pick.i, today())) return { ok: false, reason: "impossible" };
+  } else {
+    if (W.slots.length >= 3 || !weekRemaining(wk, W.slots).length) return { ok: false, reason: W0 ? "full" : "none" };
+    W.slots.push({ d: today(), type: null, done: null }); reassignTypes(W, wk);
+  }
+  const idx = W.slots.findIndex((x) => x.d === today()), note = consecutiveNote(W.slots);
+  W.msg = "Tu as ajouté une séance aujourd'hui : le reste de ta semaine est réajusté." + (note ? " " + note : "");
+  const res = { ok: true, wk, idx, type: W.slots[idx].type, slots: W.slots.map((x) => ({ d: x.d, type: x.type, done: !!x.done })) };
+  if (!dry) { S.weeks[wk] = W; saveState(); }
   return res;
 }
 /* Les 7 jours d'une semaine avec leur séance éventuelle (bande « Ma semaine ») */
 function weekDays(wk) {
   const W = S.weeks[wk];
   return Array.from({ length: 7 }, (_, di) => {
-    const d = addDays(wk, di), idx = W ? W.slots.findIndex((s) => s.d === d) : -1;
+    const d = addDays(wk, di), idx = W ? W.slots.findIndex((x) => x.d === d) : -1;
     return { d, di, idx, slot: idx >= 0 ? W.slots[idx] : null };
   });
 }
 function nextSession() { // prochaine séance non faite après aujourd'hui (cette semaine ou la suivante)
   const cur = weekKey(today()), c = [];
-  [cur, addDays(cur, 7)].forEach((wk) => { const W = S.weeks[wk]; if (W) W.slots.forEach((s, i) => { if (!s.done && s.d > today()) c.push({ wk, i, d: s.d, type: s.type }); }); });
-  c.sort((a, b) => (a.d < b.d ? -1 : 1));
+  [cur, addDays(cur, 7)].forEach((wk) => { const W = S.weeks[wk]; if (W) W.slots.forEach((x, i) => { if (!x.done && x.d > today()) c.push({ wk, i, d: x.d, type: x.type }); }); });
+  c.sort(byDate);
   return c[0] || null;
 }
 function overdueSession() { // séance de cette semaine prévue avant aujourd'hui et pas faite
   const wk = weekKey(today()), W = S.weeks[wk]; if (!W) return null;
-  const i = W.slots.findIndex((s) => !s.done && s.d < today());
+  const i = W.slots.findIndex((x) => !x.done && x.d < today());
   return i >= 0 ? { wk, i, d: W.slots[i].d, type: W.slots[i].type } : null;
+}
+/* Jours proposés pour « Générer ma semaine » : pas de jour passé, pas de jour déjà fait, au plus autant de jours que de séances restantes */
+function genOptions(wk) {
+  const W = S.weeks[wk], isCur = wk === weekKey(today()), kept = W ? W.slots.filter((x) => x.done) : [];
+  const rem = weekRemaining(wk, kept);
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = addDays(wk, i), done = kept.some((x) => x.d === d);
+    return { d, done, disabled: done || (isCur && d < today()) };
+  });
+  return { days, max: rem.length, remaining: rem };
+}
+
+/* ================= SÉANCE FAITE HORS APP / ENREGISTREMENT ================= */
+/* Rattache une séance déjà faite au planning de sa semaine (si possible) et réaffecte les autres */
+function attachSession(sess) {
+  const wk = weekKey(sess.d), W = S.weeks[wk]; if (!W) return false;
+  let idx = W.slots.findIndex((x) => x.d === sess.d && !x.done);
+  if (idx < 0) idx = W.slots.findIndex((x) => !x.done && x.type === sess.type);
+  if (idx < 0) { const u = W.slots.map((x, i) => ({ x, i })).filter((o) => !o.x.done).sort((a, b) => byDate(a.x, b.x)); if (u.length) idx = u[0].i; }
+  if (idx < 0) return false;
+  const sl = W.slots[idx];
+  if (sl.d !== sess.d) { if (W.slots.some((x, i) => i !== idx && x.d === sess.d)) return false; sl.d = sess.d; }
+  sl.done = sess.id; sl.type = sess.type;
+  reassignTypes(W, wk);
+  return true;
+}
+/* Une séance saisie à la main peut être faite sur une autre variante que celle du moment : la progression suit */
+function syncRungs(sess) {
+  sess.items.forEach((it) => {
+    if (!it.manual || !it.lad || it.rg == null) return;
+    const p = lp(it.lad);
+    if (p.r !== it.rg) { p.r = it.rg; p.up = p.down = p.stag = 0; p.tweak = null; p.noSeed = true; p.kg = LADDERS[it.lad].rungs[it.rg].weighted ? (it.kg || KG_STEP) : 0; }
+    else if (LADDERS[it.lad].rungs[it.rg].weighted && it.kg > 0) p.kg = it.kg;
+  });
+}
+/* Enregistre une séance terminée (dans l'app ou après coup). ref = { wk, idx } si elle vient du planning. */
+function commitSession(sess, ref) {
+  S.sessions.push(sess);
+  S.sessions.sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
+  const latest = !S.sessions.some((x) => x !== sess && x.d > sess.d);
+  if (ref && S.weeks[ref.wk] && S.weeks[ref.wk].slots[ref.idx]) S.weeks[ref.wk].slots[ref.idx].done = sess.id;
+  else attachSession(sess);
+  const mu = sess.items.some((it) => it.exId === "muscle_up" && !it.origId && it.sets.some((x) => x.done && x.r >= 1));
+  if (mu && !S.muscleUp) S.muscleUp = sess.d;
+  if (sess.manual) syncRungs(sess);
+  const notes = latest ? evaluateSession(sess) : [{ kind: "same", exId: null, text: "Séance ajoutée à ton historique : records et portes sont à jour. Comme elle est plus ancienne que tes dernières séances, la progression n'est pas recalculée." }];
+  saveState();
+  return { notes, mu, latest };
 }
 function todayState() {
   const wk = weekKey(today()), W = S.weeks[wk];
@@ -397,11 +494,15 @@ function boostsFor(di) {
 }
 function updateBoosts(wk) { const P = S.plans[wk]; if (P) for (let di = 0; di < 7; di++) P.days[di].boost = boostsFor(di); }
 const planSlots = ["matin", "midi", "gouter", "soir", "coll"];
-function generateMeals(wk) {
-  const prev = S.plans[addDays(wk, -7)], wn = Math.round(daysBetween("2026-01-05", wk) / 7);
+function generateMeals(wk, keepUpTo) {
+  const prev = S.plans[addDays(wk, -7)], wn = Math.round(daysBetween("2026-01-05", wk) / 7), old = keepUpTo ? S.plans[wk] : null;
   const usedLastWeek = new Set(); if (prev) for (let di = 0; di < 7; di++) planSlots.forEach((sl) => usedLastWeek.add(prev.days[di][sl]));
   const cnt = {}, days = {};
   for (let di = 0; di < 7; di++) {
+    if (old && addDays(wk, di) <= keepUpTo) { // jours passés (et aujourd'hui) : on ne change rien
+      days[di] = Object.assign({}, old.days[di]); planSlots.forEach((sl) => { cnt[days[di][sl]] = (cnt[days[di][sl]] || 0) + 1; });
+      continue;
+    }
     days[di] = {};
     planSlots.forEach((sl) => {
       const m = pickMeal(sl, di, cnt, prev ? prev.days[di][sl] : null, di ? days[di - 1][sl] : null, usedLastWeek, wn, []);

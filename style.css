@@ -159,3 +159,5 @@ button.wd { cursor: pointer; }
 .exrow { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); font-weight: 600; }
 .exrow:first-child { border-top: 0; }
 .exrow > span:last-child { text-align: right; flex: 0 0 auto; }
+.offgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.offgrid input { text-align: center; padding: 8px 4px; font-weight: 800; font-size: 20px; min-height: 52px; }

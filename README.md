@@ -26,8 +26,10 @@ Application web installable (PWA), faite pour une seule personne.
 ## Tests automatiques
 
 ```bash
-node tests/logic.test.js
+node tests/logic.test.js     # règles (progression, semaine, séance non prévue, hors app, repas, poids, migration)
 ```
+
+Parcours dans un navigateur à taille de téléphone : `python3 -m http.server 8123` puis `node tests/e2e.js`.
 
 ## Fichiers
 
@@ -39,6 +41,6 @@ node tests/logic.test.js
 | `js/ui.js`, `js/session.js` | Les écrans et le mode séance |
 | `sw.js`, `manifest.webmanifest` | Installation et fonctionnement hors connexion |
 
-Après une modification du code, changer le numéro dans `sw.js` (`forge-v3` → `forge-v4`).
+Après une modification du code, changer le numéro dans `sw.js` (`forge-v4` → `forge-v5`).
 
 FORGE ne remplace pas l'avis d'un médecin.
